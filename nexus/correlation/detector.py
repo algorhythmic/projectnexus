@@ -1,7 +1,8 @@
 """Anomaly detection engine for single-market anomalies."""
 
+import re
 import time
-from typing import List
+from typing import List, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import (
@@ -122,28 +123,39 @@ class AnomalyDetector(LoggerMixin):
         now_ms: int,
     ) -> int:
         """Detect anomalies and store them. Returns count of anomalies stored."""
-        anomalies = await self.detect_all(market_ids, window_configs, now_ms)
+        count = 0
+        for mid in market_ids:
+            anomalies = await self.detect_market(mid, window_configs, now_ms)
+            for anomaly in anomalies:
+                # Compute price_delta and volume_ratio for market links
+                wm = self._parse_window_minutes(anomaly.summary or "")
+                price_delta = None
+                volume_ratio = None
+                if wm is not None:
+                    stats = await self._wc.compute_window(mid, wm, now_ms)
+                    price_delta = stats.price_delta
+                    if stats.volume_total > 0:
+                        baseline = await self._wc.compute_baseline(
+                            mid, "volume", self._baseline_hours, wm, now_ms
+                        )
+                        if baseline.mean > 0:
+                            volume_ratio = round(
+                                stats.volume_total / baseline.mean, 2
+                            )
 
-        for anomaly in anomalies:
-            # Extract market_id from summary (it's always a single-market anomaly)
-            # Parse from the anomaly we just created
-            market_id = self._extract_market_id(anomaly.summary or "")
-            links = []
-            if market_id is not None:
                 links = [AnomalyMarketRecord(
-                    anomaly_id=0,  # Will be set by store
-                    market_id=market_id,
+                    anomaly_id=0,
+                    market_id=mid,
+                    price_delta=price_delta,
+                    volume_ratio=volume_ratio,
                 )]
-            await self._store.insert_anomaly(anomaly, links)
+                await self._store.insert_anomaly(anomaly, links)
+                count += 1
 
-        return len(anomalies)
+        return count
 
     @staticmethod
-    def _extract_market_id(summary: str) -> int | None:
-        """Extract market_id from summary string like 'market_id=42: ...'."""
-        if summary.startswith("market_id="):
-            try:
-                return int(summary.split("=")[1].split(":")[0])
-            except (IndexError, ValueError):
-                return None
-        return None
+    def _parse_window_minutes(summary: str) -> Optional[int]:
+        """Extract window minutes from summary like '... in 60min window'."""
+        match = re.search(r"in (\d+)min window", summary)
+        return int(match.group(1)) if match else None

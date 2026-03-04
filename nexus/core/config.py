@@ -148,6 +148,16 @@ class Settings(BaseSettings):
         default=24, description="Auto-expire anomalies older than this"
     )
 
+    # Cluster Correlation (Milestone 2.3)
+    cluster_anomaly_min_markets: int = Field(
+        default=2,
+        description="Min markets in cluster that must be anomalous to trigger cluster alert",
+    )
+    cluster_anomaly_window_minutes: int = Field(
+        default=60,
+        description="Time window (minutes) to check for concurrent anomalies",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

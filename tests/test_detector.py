@@ -197,8 +197,9 @@ class TestAnomalyDetector:
         # The 10-min window should see both events; 5-min may or may not
         assert len(anomalies) >= 1
 
-    async def test_extract_market_id(self, tmp_store):
-        """_extract_market_id parses summary correctly."""
-        assert AnomalyDetector._extract_market_id("market_id=42: +10% price") == 42
-        assert AnomalyDetector._extract_market_id("no match") is None
-        assert AnomalyDetector._extract_market_id("") is None
+    async def test_parse_window_minutes(self, tmp_store):
+        """_parse_window_minutes extracts window size from summary."""
+        assert AnomalyDetector._parse_window_minutes("market_id=42: +10% price in 60min window") == 60
+        assert AnomalyDetector._parse_window_minutes("in 5min window") == 5
+        assert AnomalyDetector._parse_window_minutes("no match") is None
+        assert AnomalyDetector._parse_window_minutes("") is None

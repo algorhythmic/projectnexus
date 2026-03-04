@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import WindowConfig
+from nexus.correlation.correlator import ClusterCorrelator
 from nexus.correlation.detector import AnomalyDetector
 from nexus.correlation.windows import WindowComputer
 from nexus.store.base import BaseStore
@@ -21,12 +22,16 @@ class DetectionLoop(LoggerMixin):
         interval_seconds: int = 300,
         baseline_hours: int = 24,
         expiry_hours: int = 24,
+        cluster_min_markets: int = 0,
+        cluster_window_minutes: int = 60,
     ) -> None:
         self._store = store
         self._window_configs = window_configs
         self._interval = interval_seconds
         self._baseline_hours = baseline_hours
         self._expiry_hours = expiry_hours
+        self._cluster_min_markets = cluster_min_markets
+        self._cluster_window_minutes = cluster_window_minutes
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
@@ -57,12 +62,23 @@ class DetectionLoop(LoggerMixin):
             market_ids, self._window_configs, now_ms
         )
 
+        # Run cluster correlation if enabled
+        cluster_count = 0
+        if self._cluster_min_markets > 0:
+            correlator = ClusterCorrelator(
+                self._store,
+                min_cluster_markets=self._cluster_min_markets,
+                cluster_window_minutes=self._cluster_window_minutes,
+            )
+            cluster_count = await correlator.correlate_and_store(now_ms)
+
         self.logger.info(
             "detection_cycle_complete",
             markets_scanned=len(market_ids),
             anomalies_found=count,
+            cluster_anomalies=cluster_count,
         )
-        return count
+        return count + cluster_count
 
     async def run_forever(self) -> None:
         """Run detection cycles at the configured interval."""

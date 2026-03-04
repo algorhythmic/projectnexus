@@ -395,7 +395,7 @@ def validate(
 
 @app.command()
 def detect() -> None:
-    """Run a single anomaly detection cycle."""
+    """Run a single anomaly detection cycle (includes cluster correlation)."""
     from nexus.correlation.detection_loop import DetectionLoop
     from nexus.store.sqlite import SQLiteStore
 
@@ -408,6 +408,8 @@ def detect() -> None:
             window_configs=settings.anomaly_window_configs,
             baseline_hours=settings.anomaly_baseline_hours,
             expiry_hours=settings.anomaly_expiry_hours,
+            cluster_min_markets=settings.cluster_anomaly_min_markets,
+            cluster_window_minutes=settings.cluster_anomaly_window_minutes,
         )
         count = await loop.run_once()
         await store.close()
@@ -422,6 +424,7 @@ def anomalies(
     since_hours: int = typer.Option(24, help="Show anomalies from last N hours"),
     min_severity: float = typer.Option(0.0, help="Minimum severity threshold"),
     status: str = typer.Option("", help="Filter by status (active/expired/acknowledged)"),
+    anomaly_type: str = typer.Option("", help="Filter by type (single_market/cluster)"),
     limit: int = typer.Option(50, help="Max anomalies to show"),
 ) -> None:
     """List recent anomalies."""
@@ -439,6 +442,7 @@ def anomalies(
             since=since,
             min_severity=min_severity if min_severity > 0 else None,
             status=status_filter,
+            anomaly_type=anomaly_type if anomaly_type else None,
             limit=limit,
         )
         await store.close()
@@ -458,13 +462,24 @@ def anomalies(
 
         for a in results:
             sev_style = "red" if a.severity >= 0.7 else "yellow" if a.severity >= 0.4 else "green"
+            summary_text = (a.summary or "")[:60]
+            # For cluster anomalies, show cluster name from metadata
+            if a.anomaly_type.value == "cluster" and a.metadata:
+                import json as _json
+                try:
+                    meta = _json.loads(a.metadata)
+                    cname = meta.get("cluster_name", "")
+                    if cname:
+                        summary_text = f"[{cname}] {summary_text}"[:60]
+                except (ValueError, TypeError):
+                    pass
             table.add_row(
                 str(a.id),
                 _format_ms_timestamp(a.detected_at),
                 a.anomaly_type.value,
                 f"[{sev_style}]{a.severity:.2f}[/{sev_style}]",
                 str(a.market_count),
-                (a.summary or "")[:60],
+                summary_text,
                 a.status.value,
             )
 
@@ -525,6 +540,137 @@ def anomaly_stats(
             console.print(f"  Target: < 50/day, Current: {alerts_per_day:.1f}/day")
 
     asyncio.run(_stats())
+
+
+@app.command()
+def correlate() -> None:
+    """Run a single cluster correlation cycle (standalone, no single-market detection)."""
+    from nexus.correlation.correlator import ClusterCorrelator
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _correlate() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        correlator = ClusterCorrelator(
+            store,
+            min_cluster_markets=settings.cluster_anomaly_min_markets,
+            cluster_window_minutes=settings.cluster_anomaly_window_minutes,
+        )
+        now_ms = int(time.time() * 1000)
+        count = await correlator.correlate_and_store(now_ms)
+        await store.close()
+
+        console.print(f"Correlation complete: {count} cluster anomalies found")
+
+    asyncio.run(_correlate())
+
+
+@app.command(name="signal-report")
+def signal_report(
+    days: int = typer.Option(7, help="Analysis window in days"),
+) -> None:
+    """Show Decision Gate signal analysis for cluster correlation."""
+    from nexus.core.types import AnomalyType
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _report() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        now_ms = int(time.time() * 1000)
+        since = now_ms - (days * 24 * 3600 * 1000)
+
+        all_anomalies = await store.get_anomalies(since=since, limit=100000)
+        single = [a for a in all_anomalies if a.anomaly_type == AnomalyType.SINGLE_MARKET]
+        cluster_list = [a for a in all_anomalies if a.anomaly_type == AnomalyType.CLUSTER]
+
+        total = len(all_anomalies)
+        alerts_per_day = total / max(days, 1)
+        cluster_per_day = len(cluster_list) / max(days, 1)
+
+        # Summary table
+        table = Table(title=f"Signal Report (last {days} days)")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_column("Status", style="bold")
+
+        table.add_row("Total anomalies", str(total), "")
+        table.add_row("Single-market", str(len(single)), "")
+        table.add_row("Cluster", str(len(cluster_list)), "")
+        table.add_row(
+            "Total alerts/day",
+            f"{alerts_per_day:.1f}",
+            "[green]PASS[/green]" if alerts_per_day < 50 else "[red]FAIL[/red]",
+        )
+        table.add_row("Cluster alerts/day", f"{cluster_per_day:.1f}", "")
+
+        # Severity distribution
+        high = sum(1 for a in all_anomalies if a.severity >= 0.7)
+        medium = sum(1 for a in all_anomalies if 0.4 <= a.severity < 0.7)
+        low = sum(1 for a in all_anomalies if a.severity < 0.4)
+        table.add_row("High severity (>=0.7)", str(high), "")
+        table.add_row("Medium (0.4-0.7)", str(medium), "")
+        table.add_row("Low (<0.4)", str(low), "")
+
+        console.print(table)
+
+        # Cluster anomaly detail table
+        if cluster_list:
+            import json as _json
+
+            detail = Table(title="Cluster Anomaly Details")
+            detail.add_column("ID", style="dim")
+            detail.add_column("Detected", style="cyan")
+            detail.add_column("Cluster", style="blue")
+            detail.add_column("Markets", style="green")
+            detail.add_column("Direction", style="yellow")
+            detail.add_column("Severity", style="red")
+            detail.add_column("Catalyst?", style="dim")
+
+            for a in cluster_list:
+                cluster_name = ""
+                direction = ""
+                if a.metadata:
+                    try:
+                        meta = _json.loads(a.metadata)
+                        cluster_name = meta.get("cluster_name", "")
+                        direction = meta.get("direction", "")
+                    except (ValueError, TypeError):
+                        pass
+                detail.add_row(
+                    str(a.id),
+                    _format_ms_timestamp(a.detected_at),
+                    cluster_name,
+                    str(a.market_count),
+                    direction,
+                    f"{a.severity:.2f}",
+                    "[ ]",
+                )
+
+            console.print(detail)
+
+        # Decision Gate
+        console.print()
+        rate_ok = alerts_per_day < 50
+        if rate_ok:
+            console.print("[bold green]DECISION GATE (< 50 alerts/day): PASS[/bold green]")
+        else:
+            console.print("[bold red]DECISION GATE (< 50 alerts/day): FAIL[/bold red]")
+            console.print(f"  Current: {alerts_per_day:.1f}/day (target < 50)")
+
+        console.print(
+            "[bold yellow]DECISION GATE (> 60% signal quality): "
+            "MANUAL VALIDATION REQUIRED[/bold yellow]"
+        )
+        console.print(
+            "  Review cluster anomalies above and mark 'Catalyst?' column "
+            "against news sources."
+        )
+
+        await store.close()
+
+    asyncio.run(_report())
 
 
 @app.command()
