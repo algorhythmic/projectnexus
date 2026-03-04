@@ -393,5 +393,277 @@ def validate(
     asyncio.run(_validate())
 
 
+@app.command()
+def detect() -> None:
+    """Run a single anomaly detection cycle."""
+    from nexus.correlation.detection_loop import DetectionLoop
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _detect() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        loop = DetectionLoop(
+            store=store,
+            window_configs=settings.anomaly_window_configs,
+            baseline_hours=settings.anomaly_baseline_hours,
+            expiry_hours=settings.anomaly_expiry_hours,
+        )
+        count = await loop.run_once()
+        await store.close()
+
+        console.print(f"Detection complete: {count} anomalies found")
+
+    asyncio.run(_detect())
+
+
+@app.command()
+def anomalies(
+    since_hours: int = typer.Option(24, help="Show anomalies from last N hours"),
+    min_severity: float = typer.Option(0.0, help="Minimum severity threshold"),
+    status: str = typer.Option("", help="Filter by status (active/expired/acknowledged)"),
+    limit: int = typer.Option(50, help="Max anomalies to show"),
+) -> None:
+    """List recent anomalies."""
+    from nexus.core.types import AnomalyStatus
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _anomalies() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        since = int((time.time() - since_hours * 3600) * 1000) if since_hours > 0 else None
+        status_filter = AnomalyStatus(status) if status else None
+
+        results = await store.get_anomalies(
+            since=since,
+            min_severity=min_severity if min_severity > 0 else None,
+            status=status_filter,
+            limit=limit,
+        )
+        await store.close()
+
+        if not results:
+            console.print("No anomalies found.")
+            return
+
+        table = Table(title=f"Anomalies (last {since_hours}h)")
+        table.add_column("ID", style="dim")
+        table.add_column("Detected", style="cyan")
+        table.add_column("Type", style="blue")
+        table.add_column("Severity", style="yellow")
+        table.add_column("Markets", style="green")
+        table.add_column("Summary")
+        table.add_column("Status", style="bold")
+
+        for a in results:
+            sev_style = "red" if a.severity >= 0.7 else "yellow" if a.severity >= 0.4 else "green"
+            table.add_row(
+                str(a.id),
+                _format_ms_timestamp(a.detected_at),
+                a.anomaly_type.value,
+                f"[{sev_style}]{a.severity:.2f}[/{sev_style}]",
+                str(a.market_count),
+                (a.summary or "")[:60],
+                a.status.value,
+            )
+
+        console.print(table)
+
+    asyncio.run(_anomalies())
+
+
+@app.command(name="anomaly-stats")
+def anomaly_stats(
+    hours: int = typer.Option(24, help="Analysis window in hours"),
+) -> None:
+    """Show anomaly signal quality statistics."""
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _stats() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        now_ms = int(time.time() * 1000)
+        since = now_ms - (hours * 3600 * 1000)
+        results = await store.get_anomalies(since=since, limit=10000)
+        await store.close()
+
+        total = len(results)
+        alerts_per_day = total / max(hours / 24, 1)
+
+        table = Table(title=f"Anomaly Statistics (last {hours}h)")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_column("Status", style="bold")
+
+        table.add_row(
+            "Total anomalies", str(total), ""
+        )
+        table.add_row(
+            "Alerts/day rate",
+            f"{alerts_per_day:.1f}",
+            "[green]PASS[/green]" if alerts_per_day < 50 else "[yellow]HIGH[/yellow]",
+        )
+
+        # Severity distribution
+        high = sum(1 for a in results if a.severity >= 0.7)
+        medium = sum(1 for a in results if 0.4 <= a.severity < 0.7)
+        low = sum(1 for a in results if a.severity < 0.4)
+        table.add_row("High severity (>=0.7)", str(high), "")
+        table.add_row("Medium severity (0.4-0.7)", str(medium), "")
+        table.add_row("Low severity (<0.4)", str(low), "")
+
+        console.print(table)
+
+        # Decision Gate
+        console.print()
+        if alerts_per_day < 50:
+            console.print("[bold green]DECISION GATE (alert rate): PASS[/bold green]")
+        else:
+            console.print("[bold yellow]DECISION GATE (alert rate): NOT MET[/bold yellow]")
+            console.print(f"  Target: < 50/day, Current: {alerts_per_day:.1f}/day")
+
+    asyncio.run(_stats())
+
+
+@app.command()
+def cluster(
+    mode: str = typer.Option("incremental", help="'batch' or 'incremental'"),
+    dry_run: bool = typer.Option(False, help="Show unassigned count without calling LLM"),
+) -> None:
+    """Run topic clustering on unassigned markets."""
+    from nexus.clustering.clusterer import TopicClusterer
+    from nexus.clustering.llm_client import ClaudeClient
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _cluster() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        unassigned = await store.get_unassigned_markets()
+        console.print(f"Unassigned markets: {len(unassigned)}")
+
+        if dry_run:
+            await store.close()
+            return
+
+        if not unassigned:
+            console.print("Nothing to cluster.")
+            await store.close()
+            return
+
+        try:
+            client = ClaudeClient(settings)
+        except ValueError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            await store.close()
+            return
+
+        clusterer = TopicClusterer(store, client, settings)
+
+        if mode == "batch":
+            count = await clusterer.batch_cluster()
+        else:
+            count = await clusterer.incremental_cluster()
+
+        cost = client.get_cost_summary()
+        await client.close()
+        await store.close()
+
+        console.print(f"Assignments made: {count}")
+        console.print(
+            f"LLM cost: ${cost['total_cost_usd']:.4f} "
+            f"({cost['total_requests']} calls, "
+            f"{cost['total_input_tokens']} in / {cost['total_output_tokens']} out tokens)"
+        )
+
+    asyncio.run(_cluster())
+
+
+@app.command()
+def clusters(
+    show_markets: bool = typer.Option(False, help="Show markets in each cluster"),
+) -> None:
+    """List all topic clusters."""
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _clusters() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        all_clusters = await store.get_clusters()
+        if not all_clusters:
+            console.print("No clusters found. Run [cyan]nexus cluster[/cyan] first.")
+            await store.close()
+            return
+
+        table = Table(title="Topic Clusters")
+        table.add_column("ID", style="dim")
+        table.add_column("Name", style="cyan")
+        table.add_column("Description")
+        table.add_column("Markets", style="green")
+        table.add_column("Created", style="dim")
+
+        for c in all_clusters:
+            markets = await store.get_cluster_markets(c.id)
+            table.add_row(
+                str(c.id),
+                c.name,
+                (c.description or "")[:50],
+                str(len(markets)),
+                _format_ms_timestamp(c.created_at),
+            )
+
+            if show_markets and markets:
+                for mid, conf in markets:
+                    m = await store.get_market_by_id(mid) if hasattr(store, 'get_market_by_id') else None
+                    title = f"market_id={mid}" if m is None else m.title[:40]
+                    table.add_row("", f"  {title}", "", f"{conf:.2f}", "")
+
+        console.print(table)
+        await store.close()
+
+    asyncio.run(_clusters())
+
+
+@app.command(name="cluster-stats")
+def cluster_stats() -> None:
+    """Show topic clustering quality statistics."""
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _stats() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        total_markets = await store.get_market_count()
+        all_clusters = await store.get_clusters()
+        unassigned = await store.get_unassigned_markets()
+        assigned = total_markets - len(unassigned)
+
+        table = Table(title="Clustering Statistics")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("Total markets", str(total_markets))
+        table.add_row("Assigned", str(assigned))
+        table.add_row("Unassigned", str(len(unassigned)))
+        table.add_row("Total clusters", str(len(all_clusters)))
+
+        if all_clusters:
+            sizes = []
+            for c in all_clusters:
+                markets = await store.get_cluster_markets(c.id)
+                sizes.append(len(markets))
+            table.add_row("Avg markets/cluster", f"{sum(sizes)/len(sizes):.1f}")
+            table.add_row("Min markets/cluster", str(min(sizes)))
+            table.add_row("Max markets/cluster", str(max(sizes)))
+
+        console.print(table)
+        await store.close()
+
+    asyncio.run(_stats())
+
+
 if __name__ == "__main__":
     app()

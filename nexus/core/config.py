@@ -1,9 +1,11 @@
 """Configuration management for Nexus."""
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from nexus.core.types import WindowConfig
 
 
 class Settings(BaseSettings):
@@ -101,6 +103,51 @@ class Settings(BaseSettings):
         default=60, description="Seconds between health report log entries"
     )
 
+    # LLM / Clustering
+    anthropic_api_key: str = Field(
+        default="", description="Anthropic API key for Claude"
+    )
+    clustering_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Claude model for clustering",
+    )
+    clustering_temperature: float = Field(
+        default=0.1, description="LLM temperature (low = deterministic)"
+    )
+    clustering_max_tokens: int = Field(
+        default=4096, description="Max output tokens per LLM call"
+    )
+    clustering_batch_size: int = Field(
+        default=30, description="Markets per LLM batch call"
+    )
+    clustering_min_confidence: float = Field(
+        default=0.6, description="Minimum confidence for cluster assignment"
+    )
+
+    # Anomaly Detection
+    anomaly_detection_interval_seconds: int = Field(
+        default=300, description="Seconds between detection cycles"
+    )
+    anomaly_windows: str = Field(
+        default="5,15,60,1440",
+        description="Comma-separated window sizes in minutes",
+    )
+    anomaly_price_change_threshold: float = Field(
+        default=0.10, description="Price change threshold (0.10 = 10%)"
+    )
+    anomaly_volume_spike_multiplier: float = Field(
+        default=3.0, description="Volume spike multiplier over baseline"
+    )
+    anomaly_zscore_threshold: float = Field(
+        default=2.5, description="Z-score threshold for anomaly"
+    )
+    anomaly_baseline_hours: int = Field(
+        default=24, description="Lookback hours for Z-score baseline"
+    )
+    anomaly_expiry_hours: int = Field(
+        default=24, description="Auto-expire anomalies older than this"
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -116,6 +163,20 @@ class Settings(BaseSettings):
         if self.kalshi_use_demo:
             return self.kalshi_demo_base_url
         return self.kalshi_base_url
+
+    @property
+    def anomaly_window_configs(self) -> List[WindowConfig]:
+        """Parse anomaly_windows string into WindowConfig objects."""
+        return [
+            WindowConfig(
+                window_minutes=int(w.strip()),
+                price_change_threshold=self.anomaly_price_change_threshold,
+                volume_spike_multiplier=self.anomaly_volume_spike_multiplier,
+                zscore_threshold=self.anomaly_zscore_threshold,
+            )
+            for w in self.anomaly_windows.split(",")
+            if w.strip()
+        ]
 
     @property
     def effective_kalshi_ws_url(self) -> str:

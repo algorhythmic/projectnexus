@@ -3,7 +3,15 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 
-from nexus.core.types import DiscoveredMarket, EventRecord, MarketRecord
+from nexus.core.types import (
+    AnomalyMarketRecord,
+    AnomalyRecord,
+    AnomalyStatus,
+    DiscoveredMarket,
+    EventRecord,
+    MarketRecord,
+    TopicCluster,
+)
 
 
 class BaseStore(ABC):
@@ -102,6 +110,109 @@ class BaseStore(ABC):
         self, since: Optional[int] = None, until: Optional[int] = None
     ) -> Dict[str, int]:
         """Count events grouped by event_type."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Anomaly detection queries (Milestone 2.1)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def get_events_in_window(
+        self,
+        market_id: int,
+        event_type: str,
+        window_start: int,
+        window_end: int,
+    ) -> List[EventRecord]:
+        """Get events for a market in a time window, ordered by timestamp ASC."""
+        ...
+
+    @abstractmethod
+    async def insert_anomaly(
+        self,
+        anomaly: AnomalyRecord,
+        market_links: List[AnomalyMarketRecord],
+    ) -> int:
+        """Insert an anomaly and its market junction rows. Returns anomaly id."""
+        ...
+
+    @abstractmethod
+    async def get_anomalies(
+        self,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        status: Optional[AnomalyStatus] = None,
+        anomaly_type: Optional[str] = None,
+        min_severity: Optional[float] = None,
+        market_id: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[AnomalyRecord]:
+        """Query anomalies with optional filters."""
+        ...
+
+    @abstractmethod
+    async def get_anomaly_markets(
+        self, anomaly_id: int
+    ) -> List[AnomalyMarketRecord]:
+        """Get market junction rows for an anomaly."""
+        ...
+
+    @abstractmethod
+    async def update_anomaly_status(
+        self, anomaly_id: int, status: AnomalyStatus
+    ) -> None:
+        """Update the lifecycle status of an anomaly."""
+        ...
+
+    @abstractmethod
+    async def expire_old_anomalies(self, older_than: int) -> int:
+        """Bulk-expire active anomalies detected before older_than (Unix ms).
+        Returns count of expired anomalies."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Topic clustering (Milestone 2.2)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def insert_cluster(self, cluster: TopicCluster) -> int:
+        """Insert a topic cluster. Returns the cluster id."""
+        ...
+
+    @abstractmethod
+    async def get_clusters(self) -> List[TopicCluster]:
+        """Get all topic clusters."""
+        ...
+
+    @abstractmethod
+    async def get_cluster_by_name(self, name: str) -> Optional[TopicCluster]:
+        """Look up a cluster by exact name."""
+        ...
+
+    @abstractmethod
+    async def assign_market_to_cluster(
+        self, market_id: int, cluster_id: int, confidence: float
+    ) -> None:
+        """Create or update a market-to-cluster assignment."""
+        ...
+
+    @abstractmethod
+    async def get_cluster_markets(
+        self, cluster_id: int
+    ) -> List[Tuple[int, float]]:
+        """Get (market_id, confidence) pairs for a cluster."""
+        ...
+
+    @abstractmethod
+    async def get_market_clusters(
+        self, market_id: int
+    ) -> List[Tuple[int, str, float]]:
+        """Get (cluster_id, cluster_name, confidence) for a market."""
+        ...
+
+    @abstractmethod
+    async def get_unassigned_markets(self) -> List[MarketRecord]:
+        """Get active markets not in any cluster."""
         ...
 
     @abstractmethod
