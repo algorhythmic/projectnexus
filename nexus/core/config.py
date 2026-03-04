@@ -96,6 +96,11 @@ class Settings(BaseSettings):
         default=1.0, description="Max seconds before flushing partial batch"
     )
 
+    # Monitoring
+    health_report_interval_seconds: int = Field(
+        default=60, description="Seconds between health report log entries"
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

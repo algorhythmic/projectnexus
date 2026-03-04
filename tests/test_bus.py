@@ -6,6 +6,7 @@ import pytest
 
 from nexus.core.types import DiscoveredMarket, EventRecord, EventType, Platform
 from nexus.ingestion.bus import EventBus
+from nexus.ingestion.metrics import MetricsCollector
 
 
 async def _insert_market(store) -> int:
@@ -106,3 +107,23 @@ class TestEventBus:
         """stop() on an unstarted bus does not error."""
         bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
         await bus.stop()  # should not raise
+
+    async def test_metrics_collector_integration(self, tmp_store):
+        """MetricsCollector tracks events written by the bus."""
+        mid = await _insert_market(tmp_store)
+        metrics = MetricsCollector()
+        bus = EventBus(
+            tmp_store, max_size=100, batch_size=10, batch_timeout=0.1,
+            metrics=metrics,
+        )
+        bus.start()
+
+        for i in range(3):
+            await bus.put(_make_event(market_id=mid, price=0.5 + i * 0.01))
+
+        await asyncio.sleep(0.5)
+        await bus.stop()
+
+        snap = metrics.snapshot()
+        assert snap.total_events_written == 3
+        assert bus.events_written == 3

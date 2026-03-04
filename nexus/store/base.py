@@ -1,7 +1,7 @@
 """Abstract base class for the Nexus event store."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from nexus.core.types import DiscoveredMarket, EventRecord, MarketRecord
 
@@ -60,6 +60,48 @@ class BaseStore(ABC):
     @abstractmethod
     async def get_event_count(self) -> int:
         """Return total number of events."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Data integrity queries (Milestone 1.3)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def get_event_count_in_range(
+        self, since: int, until: Optional[int] = None
+    ) -> int:
+        """Count events in a timestamp range (Unix ms)."""
+        ...
+
+    @abstractmethod
+    async def get_duplicate_event_count(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> int:
+        """Count duplicate events (same market_id, event_type, timestamp, new_value)."""
+        ...
+
+    @abstractmethod
+    async def get_event_gaps(
+        self,
+        gap_threshold_ms: int = 300_000,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+    ) -> List[Tuple[int, int, int]]:
+        """Find time gaps exceeding threshold. Returns (start_ms, end_ms, duration_ms) tuples."""
+        ...
+
+    @abstractmethod
+    async def get_ordering_violations(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> int:
+        """Count events where a higher id has a lower timestamp."""
+        ...
+
+    @abstractmethod
+    async def get_event_type_distribution(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> Dict[str, int]:
+        """Count events grouped by event_type."""
         ...
 
     @abstractmethod

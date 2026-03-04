@@ -7,12 +7,17 @@ propagating TCP backpressure to the WebSocket connection.
 Events are drained in batches for efficient bulk inserts.
 """
 
+from __future__ import annotations
+
 import asyncio
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import EventRecord
 from nexus.store.base import BaseStore
+
+if TYPE_CHECKING:
+    from nexus.ingestion.metrics import MetricsCollector
 
 
 class EventBus(LoggerMixin):
@@ -33,6 +38,7 @@ class EventBus(LoggerMixin):
         max_size: int = 10_000,
         batch_size: int = 100,
         batch_timeout: float = 1.0,
+        metrics: Optional[MetricsCollector] = None,
     ) -> None:
         self._store = store
         self._queue: asyncio.Queue[EventRecord] = asyncio.Queue(maxsize=max_size)
@@ -41,6 +47,7 @@ class EventBus(LoggerMixin):
         self._drain_task: Optional[asyncio.Task[None]] = None
         self._shutdown = asyncio.Event()
         self._events_written = 0
+        self._metrics = metrics
 
     @property
     def events_written(self) -> int:
@@ -126,6 +133,9 @@ class EventBus(LoggerMixin):
         try:
             count = await self._store.insert_events(batch)
             self._events_written += count
+            if self._metrics is not None:
+                self._metrics.record_events_written(count)
+                self._metrics.update_queue_depth(self._queue.qsize())
             self.logger.debug(
                 "Batch written",
                 batch_size=len(batch),
@@ -133,6 +143,8 @@ class EventBus(LoggerMixin):
                 queue_remaining=self._queue.qsize(),
             )
         except Exception as exc:
+            if self._metrics is not None:
+                self._metrics.record_events_failed(len(batch))
             self.logger.error(
                 "Failed to write event batch",
                 batch_size=len(batch),

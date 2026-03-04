@@ -5,9 +5,11 @@ asyncio.TaskGroup.  Resolves market tickers from WebSocket events to
 database IDs before routing them to the EventBus.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from nexus.adapters.base import BaseAdapter
 from nexus.core.config import Settings
@@ -16,6 +18,9 @@ from nexus.core.types import EventRecord
 from nexus.ingestion.bus import EventBus
 from nexus.ingestion.discovery import DiscoveryLoop
 from nexus.store.base import BaseStore
+
+if TYPE_CHECKING:
+    from nexus.ingestion.metrics import MetricsCollector
 
 
 class IngestionManager(LoggerMixin):
@@ -35,11 +40,13 @@ class IngestionManager(LoggerMixin):
         store: BaseStore,
         bus: EventBus,
         settings: Settings,
+        metrics: Optional[MetricsCollector] = None,
     ) -> None:
         self._adapter = adapter
         self._store = store
         self._bus = bus
         self._settings = settings
+        self._metrics = metrics
         self._running = False
 
         # ticker string → database market.id
@@ -62,6 +69,17 @@ class IngestionManager(LoggerMixin):
             cached_tickers=len(self._ticker_to_market_id),
         )
 
+        # Start health reporter if metrics are available
+        health_reporter = None
+        if self._metrics is not None:
+            from nexus.ingestion.health import HealthReporter
+
+            health_reporter = HealthReporter(
+                self._metrics,
+                interval_seconds=self._settings.health_report_interval_seconds,
+            )
+            health_reporter.start()
+
         try:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(self._discovery_task())
@@ -74,6 +92,9 @@ class IngestionManager(LoggerMixin):
                         error_type=type(exc).__name__,
                         error=str(exc),
                     )
+        finally:
+            if health_reporter is not None:
+                await health_reporter.stop()
 
     async def stop(self) -> None:
         """Signal all tasks to stop."""
@@ -126,6 +147,10 @@ class IngestionManager(LoggerMixin):
                     "Discovery cycle error",
                     error=str(exc),
                 )
+                if self._metrics is not None:
+                    from nexus.ingestion.metrics import ErrorCategory
+
+                    self._metrics.record_error(ErrorCategory.DISCOVERY_ERROR)
 
             await asyncio.sleep(self._settings.discovery_interval_seconds)
 
@@ -158,6 +183,9 @@ class IngestionManager(LoggerMixin):
             )
 
             try:
+                if self._metrics is not None:
+                    self._metrics.record_ws_connected()
+
                 async for event in self._adapter.connect(subscribe_tickers):
                     if not self._running:
                         break
@@ -167,6 +195,11 @@ class IngestionManager(LoggerMixin):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if self._metrics is not None:
+                    from nexus.ingestion.metrics import ErrorCategory
+
+                    self._metrics.record_ws_disconnected()
+                    self._metrics.record_error(ErrorCategory.WS_ERROR)
                 self.logger.error(
                     "Streaming error",
                     error_type=type(exc).__name__,

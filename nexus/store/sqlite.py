@@ -3,7 +3,7 @@
 import json
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
 
@@ -226,6 +226,126 @@ class SQLiteStore(BaseStore, LoggerMixin):
         cursor = await self.db.execute("SELECT COUNT(*) FROM events")
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+    # ------------------------------------------------------------------
+    # Data integrity queries (Milestone 1.3)
+    # ------------------------------------------------------------------
+
+    async def get_event_count_in_range(
+        self, since: int, until: Optional[int] = None
+    ) -> int:
+        if until is not None:
+            cursor = await self.db.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp <= ?",
+                (since, until),
+            )
+        else:
+            cursor = await self.db.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ?",
+                (since,),
+            )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def get_duplicate_event_count(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> int:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        query = f"""
+            SELECT COALESCE(SUM(cnt - 1), 0) FROM (
+                SELECT COUNT(*) as cnt
+                FROM events {where}
+                GROUP BY market_id, event_type, timestamp, new_value
+                HAVING COUNT(*) > 1
+            )
+        """
+        cursor = await self.db.execute(query, params)
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def get_event_gaps(
+        self,
+        gap_threshold_ms: int = 300_000,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+    ) -> List[Tuple[int, int, int]]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        # Use LEAD() window function for efficient gap detection
+        query = f"""
+            SELECT prev_ts, next_ts, (next_ts - prev_ts) as gap_ms FROM (
+                SELECT
+                    timestamp as prev_ts,
+                    LEAD(timestamp) OVER (ORDER BY timestamp) as next_ts
+                FROM events {where}
+            )
+            WHERE next_ts IS NOT NULL AND (next_ts - prev_ts) >= ?
+            ORDER BY prev_ts
+        """
+        params.append(gap_threshold_ms)
+        cursor = await self.db.execute(query, params)
+        rows = await cursor.fetchall()
+        return [(row[0], row[1], row[2]) for row in rows]
+
+    async def get_ordering_violations(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> int:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("e1.timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("e1.timestamp <= ?")
+            params.append(until)
+        where_extra = f"AND {' AND '.join(clauses)}" if clauses else ""
+
+        query = f"""
+            SELECT COUNT(*) FROM events e1
+            INNER JOIN events e2 ON e2.id = e1.id - 1
+            WHERE e1.timestamp < e2.timestamp {where_extra}
+        """
+        cursor = await self.db.execute(query, params)
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def get_event_type_distribution(
+        self, since: Optional[int] = None, until: Optional[int] = None
+    ) -> Dict[str, int]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        query = f"""
+            SELECT event_type, COUNT(*) FROM events {where}
+            GROUP BY event_type ORDER BY COUNT(*) DESC
+        """
+        cursor = await self.db.execute(query, params)
+        rows = await cursor.fetchall()
+        return {row[0]: row[1] for row in rows}
 
     # ------------------------------------------------------------------
     # Lifecycle
