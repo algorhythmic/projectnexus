@@ -36,13 +36,13 @@ class IngestionManager(LoggerMixin):
 
     def __init__(
         self,
-        adapter: BaseAdapter,
+        adapters: List[BaseAdapter],
         store: BaseStore,
         bus: EventBus,
         settings: Settings,
         metrics: Optional[MetricsCollector] = None,
     ) -> None:
-        self._adapter = adapter
+        self._adapters = adapters
         self._store = store
         self._bus = bus
         self._settings = settings
@@ -67,6 +67,7 @@ class IngestionManager(LoggerMixin):
         self.logger.info(
             "IngestionManager starting",
             cached_tickers=len(self._ticker_to_market_id),
+            adapters=len(self._adapters),
         )
 
         # Start health reporter if metrics are available
@@ -83,7 +84,8 @@ class IngestionManager(LoggerMixin):
         try:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(self._discovery_task())
-                tg.create_task(self._streaming_task())
+                for adapter in self._adapters:
+                    tg.create_task(self._streaming_task(adapter))
         except* Exception as eg:
             for exc in eg.exceptions:
                 if not isinstance(exc, asyncio.CancelledError):
@@ -126,7 +128,7 @@ class IngestionManager(LoggerMixin):
     async def _discovery_task(self) -> None:
         """Run the REST discovery loop."""
         discovery = DiscoveryLoop(
-            adapters=[self._adapter],
+            adapters=self._adapters,
             store=self._store,
             interval_seconds=self._settings.discovery_interval_seconds,
         )
@@ -158,8 +160,9 @@ class IngestionManager(LoggerMixin):
     # Streaming task
     # ------------------------------------------------------------------
 
-    async def _streaming_task(self) -> None:
-        """Run the WebSocket streaming loop."""
+    async def _streaming_task(self, adapter: BaseAdapter) -> None:
+        """Run the WebSocket streaming loop for a specific adapter."""
+        adapter_name = adapter.__class__.__name__
         # Wait briefly for the first discovery cycle to populate tickers
         await asyncio.sleep(2.0)
 
@@ -167,7 +170,8 @@ class IngestionManager(LoggerMixin):
             tickers = list(self._ticker_to_market_id.keys())
             if not tickers:
                 self.logger.info(
-                    "No tickers to subscribe — waiting for discovery"
+                    "No tickers to subscribe — waiting for discovery",
+                    adapter=adapter_name,
                 )
                 await asyncio.sleep(self._settings.discovery_interval_seconds)
                 continue
@@ -179,6 +183,7 @@ class IngestionManager(LoggerMixin):
 
             self.logger.info(
                 "Starting WebSocket stream",
+                adapter=adapter_name,
                 tickers=len(subscribe_tickers),
             )
 
@@ -186,7 +191,7 @@ class IngestionManager(LoggerMixin):
                 if self._metrics is not None:
                     self._metrics.record_ws_connected()
 
-                async for event in self._adapter.connect(subscribe_tickers):
+                async for event in adapter.connect(subscribe_tickers):
                     if not self._running:
                         break
                     resolved = self._resolve_event(event)
@@ -202,6 +207,7 @@ class IngestionManager(LoggerMixin):
                     self._metrics.record_error(ErrorCategory.WS_ERROR)
                 self.logger.error(
                     "Streaming error",
+                    adapter=adapter_name,
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )

@@ -1,9 +1,11 @@
 """Command-line interface for Nexus."""
 
 import asyncio
+import contextlib
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List
 
 import typer
 from rich.console import Console
@@ -18,6 +20,19 @@ def _format_ms_timestamp(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S UTC"
     )
+
+def _build_adapters(platform: str = "all") -> List:
+    """Build adapter list based on platform selection."""
+    from nexus.adapters.kalshi import KalshiAdapter
+    from nexus.adapters.polymarket import PolymarketAdapter
+
+    adapters: List = []
+    if platform in ("all", "kalshi"):
+        adapters.append(KalshiAdapter(settings))
+    if platform in ("all", "polymarket") and settings.polymarket_enabled:
+        adapters.append(PolymarketAdapter(settings))
+    return adapters
+
 
 app = typer.Typer(
     name="nexus",
@@ -47,6 +62,8 @@ def info() -> None:
         settings.kalshi_private_key_path or "(not set)",
     )
     table.add_row("Demo Mode", str(settings.kalshi_use_demo))
+    table.add_row("Polymarket Enabled", str(settings.polymarket_enabled))
+    table.add_row("Polymarket URL", settings.polymarket_base_url)
     table.add_row("SQLite Path", settings.sqlite_path)
     table.add_row("Discovery Interval", f"{settings.discovery_interval_seconds}s")
     table.add_row("Rate Limit", f"{settings.kalshi_reads_per_second} reads/sec")
@@ -110,9 +127,10 @@ def db_stats() -> None:
 
 
 @app.command()
-def discover() -> None:
+def discover(
+    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+) -> None:
     """Run a single discovery cycle (one-shot, no loop)."""
-    from nexus.adapters.kalshi import KalshiAdapter
     from nexus.ingestion.discovery import DiscoveryLoop
     from nexus.store.sqlite import SQLiteStore
 
@@ -120,9 +138,18 @@ def discover() -> None:
         store = SQLiteStore(settings.sqlite_path)
         await store.initialize()
 
-        async with KalshiAdapter(settings) as adapter:
+        adapters = _build_adapters(platform)
+        if not adapters:
+            console.print("[bold red]No adapters configured.[/bold red]")
+            await store.close()
+            return
+
+        async with contextlib.AsyncExitStack() as stack:
+            for a in adapters:
+                await stack.enter_async_context(a)
+
             loop = DiscoveryLoop(
-                adapters=[adapter],
+                adapters=adapters,
                 store=store,
                 interval_seconds=0,
             )
@@ -139,9 +166,10 @@ def discover() -> None:
 
 
 @app.command()
-def run() -> None:
+def run(
+    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+) -> None:
     """Start real-time ingestion (REST discovery + WebSocket streaming)."""
-    from nexus.adapters.kalshi import KalshiAdapter
     from nexus.ingestion.bus import EventBus
     from nexus.ingestion.manager import IngestionManager
     from nexus.ingestion.metrics import MetricsCollector
@@ -162,12 +190,22 @@ def run() -> None:
         )
         bus.start()
 
-        async with KalshiAdapter(settings) as adapter:
+        adapters = _build_adapters(platform)
+        if not adapters:
+            console.print("[bold red]No adapters configured.[/bold red]")
+            await bus.stop()
+            await store.close()
+            return
+
+        async with contextlib.AsyncExitStack() as stack:
+            for a in adapters:
+                await stack.enter_async_context(a)
+
             manager = IngestionManager(
-                adapter, store, bus, settings, metrics=metrics
+                adapters, store, bus, settings, metrics=metrics
             )
             console.print(
-                f"Starting ingestion (discovery every "
+                f"Starting ingestion ({len(adapters)} adapter(s), discovery every "
                 f"{settings.discovery_interval_seconds}s + WebSocket streaming, "
                 f"health reports every {settings.health_report_interval_seconds}s). "
                 f"Ctrl-c to stop."
@@ -196,9 +234,10 @@ def run() -> None:
 
 
 @app.command()
-def poll() -> None:
+def poll(
+    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+) -> None:
     """Start discovery-only polling loop (no WebSocket)."""
-    from nexus.adapters.kalshi import KalshiAdapter
     from nexus.ingestion.discovery import DiscoveryLoop
     from nexus.store.sqlite import SQLiteStore
 
@@ -206,15 +245,24 @@ def poll() -> None:
         store = SQLiteStore(settings.sqlite_path)
         await store.initialize()
 
-        async with KalshiAdapter(settings) as adapter:
+        adapters = _build_adapters(platform)
+        if not adapters:
+            console.print("[bold red]No adapters configured.[/bold red]")
+            await store.close()
+            return
+
+        async with contextlib.AsyncExitStack() as stack:
+            for a in adapters:
+                await stack.enter_async_context(a)
+
             loop = DiscoveryLoop(
-                adapters=[adapter],
+                adapters=adapters,
                 store=store,
                 interval_seconds=settings.discovery_interval_seconds,
             )
             console.print(
-                f"Polling every {settings.discovery_interval_seconds}s "
-                f"(ctrl-c to stop)"
+                f"Polling {len(adapters)} adapter(s) every "
+                f"{settings.discovery_interval_seconds}s (ctrl-c to stop)"
             )
             try:
                 await loop.run_forever()
@@ -233,32 +281,38 @@ def poll() -> None:
 
 
 @app.command()
-def stream() -> None:
+def stream(
+    platform: str = typer.Option("kalshi", help="Platform: kalshi or polymarket"),
+) -> None:
     """Stream WebSocket events to console (debug tool, no storage)."""
-    from nexus.adapters.kalshi import KalshiAdapter
     from nexus.store.sqlite import SQLiteStore
 
     async def _stream() -> None:
-        # Load tickers from the store (requires prior discovery)
         store = SQLiteStore(settings.sqlite_path)
         await store.initialize()
-        markets = await store.get_active_markets(platform="kalshi")
+        markets = await store.get_active_markets(platform=platform)
         tickers = [m.external_id for m in markets]
         await store.close()
 
         if not tickers:
             console.print(
-                "[bold red]No markets found.[/bold red] "
-                "Run [cyan]nexus discover[/cyan] first."
+                f"[bold red]No {platform} markets found.[/bold red] "
+                f"Run [cyan]nexus discover --platform {platform}[/cyan] first."
             )
             return
 
+        adapters = _build_adapters(platform)
+        if not adapters:
+            console.print("[bold red]No adapter for platform.[/bold red]")
+            return
+
+        adapter = adapters[0]
         console.print(
-            f"Streaming {len(tickers)} tickers (ctrl-c to stop)"
+            f"Streaming {len(tickers)} {platform} tickers (ctrl-c to stop)"
         )
 
         count = 0
-        async with KalshiAdapter(settings) as adapter:
+        async with adapter:
             async for event in adapter.connect(tickers):
                 count += 1
                 console.print(

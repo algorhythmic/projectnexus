@@ -87,6 +87,32 @@ class Settings(BaseSettings):
         default=200, description="Max tickers per WebSocket connection"
     )
 
+    # Polymarket API
+    polymarket_base_url: str = Field(
+        default="https://gamma-api.polymarket.com",
+        description="Polymarket Gamma API base URL",
+    )
+    polymarket_ws_url: str = Field(
+        default="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        description="Polymarket CLOB WebSocket URL for market data",
+    )
+    polymarket_reads_per_second: float = Field(
+        default=25.0,
+        description="Polymarket reads/sec (API limit is 300/10s)",
+    )
+    polymarket_ws_ping_interval: int = Field(
+        default=10,
+        description="Seconds between PING heartbeats to Polymarket WebSocket",
+    )
+    polymarket_discovery_page_size: int = Field(
+        default=100,
+        description="Number of markets per page in Polymarket discovery",
+    )
+    polymarket_enabled: bool = Field(
+        default=False,
+        description="Enable Polymarket adapter",
+    )
+
     # Event Bus
     event_queue_max_size: int = Field(
         default=10_000, description="Bounded asyncio.Queue max size"

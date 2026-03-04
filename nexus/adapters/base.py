@@ -125,7 +125,7 @@ class BaseAdapter(LoggerMixin, ABC):
         path: str,
         params: Optional[Dict[str, Any]] = None,
         json_body: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Make an HTTP request with rate limiting and retry."""
         await self._rate_limiter.acquire()
         url = f"{self._base_url}/{path.lstrip('/')}"

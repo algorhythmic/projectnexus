@@ -82,7 +82,7 @@ class TestIngestionManager:
         )
         bus.start()
 
-        manager = IngestionManager(adapter, tmp_store, bus, sample_settings)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
 
         # Run briefly then stop
         async def run_briefly():
@@ -122,7 +122,7 @@ class TestIngestionManager:
             batch_timeout=0.1,
         )
 
-        manager = IngestionManager(adapter, tmp_store, bus, sample_settings)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
 
         # Build cache with no markets
         await manager._build_ticker_cache()
@@ -165,7 +165,7 @@ class TestIngestionManager:
 
         adapter = FakeStreamingAdapter(markets=[], events=[])
         bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
-        manager = IngestionManager(adapter, tmp_store, bus, sample_settings)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
 
         await manager._build_ticker_cache()
         assert "CACHED-1" in manager._ticker_to_market_id
@@ -174,7 +174,7 @@ class TestIngestionManager:
         """stop() sets _running to False."""
         adapter = FakeStreamingAdapter(markets=[], events=[])
         bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
-        manager = IngestionManager(adapter, tmp_store, bus, sample_settings)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
         manager._running = True
         await manager.stop()
         assert manager._running is False
