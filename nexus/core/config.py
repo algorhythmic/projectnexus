@@ -63,6 +63,39 @@ class Settings(BaseSettings):
         description="Kalshi reads/sec (Basic tier limit is 20)",
     )
 
+    # WebSocket
+    kalshi_ws_url: str = Field(
+        default="wss://trading-api.kalshi.com/trade-api/ws/v2",
+        description="Kalshi production WebSocket URL",
+    )
+    kalshi_demo_ws_url: str = Field(
+        default="wss://demo-api.kalshi.com/trade-api/ws/v2",
+        description="Kalshi demo WebSocket URL",
+    )
+    ws_reconnect_delay: float = Field(
+        default=1.0, description="Initial reconnect delay in seconds"
+    )
+    ws_reconnect_max_delay: float = Field(
+        default=60.0, description="Max reconnect delay (backoff cap)"
+    )
+    ws_ping_interval: int = Field(
+        default=10, description="Seconds between WebSocket pings"
+    )
+    ws_max_subscriptions: int = Field(
+        default=200, description="Max tickers per WebSocket connection"
+    )
+
+    # Event Bus
+    event_queue_max_size: int = Field(
+        default=10_000, description="Bounded asyncio.Queue max size"
+    )
+    event_batch_size: int = Field(
+        default=100, description="Events per batch drain"
+    )
+    event_batch_timeout: float = Field(
+        default=1.0, description="Max seconds before flushing partial batch"
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -78,6 +111,13 @@ class Settings(BaseSettings):
         if self.kalshi_use_demo:
             return self.kalshi_demo_base_url
         return self.kalshi_base_url
+
+    @property
+    def effective_kalshi_ws_url(self) -> str:
+        """Get the Kalshi WebSocket URL based on demo mode setting."""
+        if self.kalshi_use_demo:
+            return self.kalshi_demo_ws_url
+        return self.kalshi_ws_url
 
 
 # Global settings instance

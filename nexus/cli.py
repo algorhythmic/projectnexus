@@ -114,12 +114,57 @@ def discover() -> None:
 
 @app.command()
 def run() -> None:
-    """Start the discovery polling loop (ctrl-c to stop)."""
+    """Start real-time ingestion (REST discovery + WebSocket streaming)."""
+    from nexus.adapters.kalshi import KalshiAdapter
+    from nexus.ingestion.bus import EventBus
+    from nexus.ingestion.manager import IngestionManager
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _run() -> None:
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+
+        bus = EventBus(
+            store=store,
+            max_size=settings.event_queue_max_size,
+            batch_size=settings.event_batch_size,
+            batch_timeout=settings.event_batch_timeout,
+        )
+        bus.start()
+
+        async with KalshiAdapter(settings) as adapter:
+            manager = IngestionManager(adapter, store, bus, settings)
+            console.print(
+                f"Starting ingestion (discovery every "
+                f"{settings.discovery_interval_seconds}s + WebSocket streaming). "
+                f"Ctrl-c to stop."
+            )
+            try:
+                await manager.run()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                await manager.stop()
+
+        await bus.stop()
+        console.print(f"Events written: {bus.events_written}")
+        await store.close()
+        console.print("Stopped.")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("\nShutdown requested.")
+
+
+@app.command()
+def poll() -> None:
+    """Start discovery-only polling loop (no WebSocket)."""
     from nexus.adapters.kalshi import KalshiAdapter
     from nexus.ingestion.discovery import DiscoveryLoop
     from nexus.store.sqlite import SQLiteStore
 
-    async def _run() -> None:
+    async def _poll() -> None:
         store = SQLiteStore(settings.sqlite_path)
         await store.initialize()
 
@@ -144,9 +189,51 @@ def run() -> None:
         console.print("Stopped.")
 
     try:
-        asyncio.run(_run())
+        asyncio.run(_poll())
     except KeyboardInterrupt:
         console.print("\nShutdown requested.")
+
+
+@app.command()
+def stream() -> None:
+    """Stream WebSocket events to console (debug tool, no storage)."""
+    from nexus.adapters.kalshi import KalshiAdapter
+    from nexus.store.sqlite import SQLiteStore
+
+    async def _stream() -> None:
+        # Load tickers from the store (requires prior discovery)
+        store = SQLiteStore(settings.sqlite_path)
+        await store.initialize()
+        markets = await store.get_active_markets(platform="kalshi")
+        tickers = [m.external_id for m in markets]
+        await store.close()
+
+        if not tickers:
+            console.print(
+                "[bold red]No markets found.[/bold red] "
+                "Run [cyan]nexus discover[/cyan] first."
+            )
+            return
+
+        console.print(
+            f"Streaming {len(tickers)} tickers (ctrl-c to stop)"
+        )
+
+        count = 0
+        async with KalshiAdapter(settings) as adapter:
+            async for event in adapter.connect(tickers):
+                count += 1
+                console.print(
+                    f"[dim]{count}[/dim] "
+                    f"[cyan]{event.event_type.value}[/cyan] "
+                    f"new={event.new_value} "
+                    f"{event.metadata or ''}"
+                )
+
+    try:
+        asyncio.run(_stream())
+    except KeyboardInterrupt:
+        console.print("\nStream stopped.")
 
 
 if __name__ == "__main__":

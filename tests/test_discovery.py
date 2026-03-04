@@ -1,6 +1,6 @@
 """Tests for the discovery polling loop."""
 
-from typing import AsyncIterator, List
+from typing import AsyncIterator, List, Sequence
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,7 +20,7 @@ class FakeAdapter(BaseAdapter):
     async def discover(self) -> List[DiscoveredMarket]:
         return self._markets
 
-    async def connect(self) -> AsyncIterator[EventRecord]:
+    async def connect(self, tickers: Sequence[str]) -> AsyncIterator[EventRecord]:
         raise NotImplementedError
         yield  # type: ignore[misc]  # pragma: no cover
 

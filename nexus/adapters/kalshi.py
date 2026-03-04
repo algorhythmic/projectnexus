@@ -5,13 +5,24 @@ Phase 1 (Milestone 1.1): REST-based market discovery with RSA-PSS auth.
 Phase 1 (Milestone 1.2): WebSocket streaming (connect method).
 """
 
+import asyncio
+import json
+import time
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
-from nexus.adapters.auth import RSAPrivateKey, generate_auth_headers, load_private_key
+import websockets
+import websockets.exceptions
+
+from nexus.adapters.auth import (
+    RSAPrivateKey,
+    generate_auth_headers,
+    load_private_key,
+    sign_request,
+)
 from nexus.adapters.base import BaseAdapter
 from nexus.core.config import Settings
-from nexus.core.types import DiscoveredMarket, EventRecord, Platform
+from nexus.core.types import DiscoveredMarket, EventRecord, EventType, Platform
 
 # Mapping of Kalshi categories to standardized names
 _CATEGORY_MAP: Dict[str, str] = {
@@ -92,6 +103,7 @@ class KalshiAdapter(BaseAdapter):
             rate_limit=settings.kalshi_reads_per_second,
             timeout=settings.request_timeout,
         )
+        self._settings = settings
         self._api_key = settings.kalshi_api_key
         self._private_key: Optional[RSAPrivateKey] = None
         self._key_path = settings.kalshi_private_key_path
@@ -162,13 +174,236 @@ class KalshiAdapter(BaseAdapter):
         return all_markets
 
     # ------------------------------------------------------------------
-    # connect() — Milestone 1.2 placeholder
+    # connect() — WebSocket streaming
     # ------------------------------------------------------------------
 
-    async def connect(self) -> AsyncIterator[EventRecord]:
-        """WebSocket streaming — implemented in Milestone 1.2."""
-        raise NotImplementedError("WebSocket support is Milestone 1.2")
-        yield  # type: ignore[misc]  # pragma: no cover
+    async def connect(
+        self, tickers: Sequence[str]
+    ) -> AsyncIterator[EventRecord]:
+        """Stream real-time events via Kalshi WebSocket.
+
+        Connects to the Kalshi WS API, subscribes to ticker and trade
+        channels for the given market tickers, and yields normalized
+        EventRecord objects.  Reconnects automatically on disconnect
+        with exponential backoff.
+
+        Events are emitted with ``market_id=0`` and the market ticker
+        stored in ``metadata``.  The IngestionManager is responsible
+        for resolving ticker → database market_id.
+        """
+        delay = self._settings.ws_reconnect_delay
+        max_delay = self._settings.ws_reconnect_max_delay
+
+        while True:
+            try:
+                headers = self._ws_auth_headers()
+                ws_url = self._settings.effective_kalshi_ws_url
+
+                self.logger.info(
+                    "Connecting to Kalshi WebSocket",
+                    url=ws_url,
+                    tickers=len(tickers),
+                )
+
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers=headers,
+                    ping_interval=self._settings.ws_ping_interval,
+                    ping_timeout=self._settings.ws_ping_interval * 2,
+                ) as ws:
+                    # Reset backoff on successful connection
+                    delay = self._settings.ws_reconnect_delay
+
+                    # Subscribe to channels
+                    await self._send_subscribe(ws, tickers, ["ticker", "trade"])
+                    self.logger.info(
+                        "Subscribed to Kalshi channels",
+                        channels=["ticker", "trade"],
+                        tickers=len(tickers),
+                    )
+
+                    # Message loop
+                    async for raw_msg in ws:
+                        try:
+                            msg = json.loads(raw_msg)
+                        except (json.JSONDecodeError, TypeError):
+                            self.logger.warning(
+                                "Non-JSON WebSocket message", raw=str(raw_msg)[:200]
+                            )
+                            continue
+
+                        event = self._normalize_ws_message(msg)
+                        if event is not None:
+                            yield event
+
+            except websockets.exceptions.ConnectionClosed as exc:
+                self.logger.warning(
+                    "WebSocket connection closed",
+                    code=exc.code,
+                    reason=str(exc.reason)[:200],
+                )
+            except Exception as exc:
+                self.logger.error(
+                    "WebSocket error",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+
+            self.logger.info(
+                "Reconnecting in %s seconds", delay, delay=delay
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+
+    # ------------------------------------------------------------------
+    # WebSocket helpers
+    # ------------------------------------------------------------------
+
+    def _ws_auth_headers(self) -> Dict[str, str]:
+        """Generate authentication headers for the WebSocket handshake."""
+        if not self._private_key or not self._api_key:
+            return {}
+        # Kalshi WS auth uses GET + the WS path for the signature
+        ws_path = "/trade-api/ws/v2"
+        return generate_auth_headers(
+            api_key=self._api_key,
+            private_key=self._private_key,
+            method="GET",
+            path=ws_path,
+        )
+
+    async def _send_subscribe(
+        self,
+        ws: Any,
+        tickers: Sequence[str],
+        channels: List[str],
+    ) -> None:
+        """Send subscription commands for the given tickers and channels."""
+        # Kalshi limits subscriptions per message; batch by max_subscriptions
+        max_subs = self._settings.ws_max_subscriptions
+        ticker_list = list(tickers)
+
+        for i in range(0, len(ticker_list), max_subs):
+            batch = ticker_list[i : i + max_subs]
+            msg = {
+                "id": i + 1,
+                "cmd": "subscribe",
+                "params": {
+                    "channels": channels,
+                    "market_tickers": batch,
+                },
+            }
+            await ws.send(json.dumps(msg))
+
+    def _normalize_ws_message(
+        self, msg: Dict[str, Any]
+    ) -> Optional[EventRecord]:
+        """Convert a raw Kalshi WebSocket message to an EventRecord.
+
+        Returns None for messages that aren't actionable events
+        (e.g. subscription confirmations, pong responses).
+        """
+        msg_type = msg.get("type")
+        now_ms = int(time.time() * 1000)
+
+        if msg_type == "ticker":
+            return self._normalize_ticker(msg, now_ms)
+        elif msg_type == "trade":
+            return self._normalize_trade(msg, now_ms)
+        elif msg_type == "market_lifecycle":
+            return self._normalize_lifecycle(msg, now_ms)
+
+        # Ignore subscription acks, pongs, errors, etc.
+        return None
+
+    def _normalize_ticker(
+        self, msg: Dict[str, Any], now_ms: int
+    ) -> Optional[EventRecord]:
+        """Normalize a ticker channel message to a PRICE_CHANGE event."""
+        market_ticker = msg.get("msg", {}).get("market_ticker")
+        if not market_ticker:
+            return None
+
+        payload = msg.get("msg", {})
+        yes_price = payload.get("yes_ask") or payload.get("yes_bid") or payload.get("last_price")
+        if yes_price is None:
+            return None
+
+        price = float(yes_price)
+        if price > 1.0:
+            price /= 100.0
+
+        return EventRecord(
+            market_id=0,
+            event_type=EventType.PRICE_CHANGE,
+            old_value=None,
+            new_value=price,
+            metadata=json.dumps({
+                "ticker": market_ticker,
+                "yes_ask": payload.get("yes_ask"),
+                "yes_bid": payload.get("yes_bid"),
+                "no_ask": payload.get("no_ask"),
+                "no_bid": payload.get("no_bid"),
+                "volume": payload.get("volume"),
+            }),
+            timestamp=now_ms,
+        )
+
+    def _normalize_trade(
+        self, msg: Dict[str, Any], now_ms: int
+    ) -> Optional[EventRecord]:
+        """Normalize a trade channel message to a TRADE event."""
+        market_ticker = msg.get("msg", {}).get("market_ticker")
+        if not market_ticker:
+            return None
+
+        payload = msg.get("msg", {})
+        yes_price = payload.get("yes_price")
+        if yes_price is None:
+            return None
+
+        price = float(yes_price)
+        if price > 1.0:
+            price /= 100.0
+
+        return EventRecord(
+            market_id=0,
+            event_type=EventType.TRADE,
+            old_value=None,
+            new_value=price,
+            metadata=json.dumps({
+                "ticker": market_ticker,
+                "count": payload.get("count"),
+                "side": payload.get("side"),
+                "taker_side": payload.get("taker_side"),
+                "no_price": payload.get("no_price"),
+            }),
+            timestamp=now_ms,
+        )
+
+    def _normalize_lifecycle(
+        self, msg: Dict[str, Any], now_ms: int
+    ) -> Optional[EventRecord]:
+        """Normalize a market lifecycle message to a STATUS_CHANGE event."""
+        market_ticker = msg.get("msg", {}).get("market_ticker")
+        if not market_ticker:
+            return None
+
+        payload = msg.get("msg", {})
+        new_status = payload.get("status") or payload.get("result")
+
+        return EventRecord(
+            market_id=0,
+            event_type=EventType.STATUS_CHANGE,
+            old_value=None,
+            new_value=0.0,
+            metadata=json.dumps({
+                "ticker": market_ticker,
+                "status": new_status,
+                "result": payload.get("result"),
+            }),
+            timestamp=now_ms,
+        )
 
     # ------------------------------------------------------------------
     # Internals

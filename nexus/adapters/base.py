@@ -3,7 +3,7 @@
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
 import httpx
 
@@ -96,10 +96,13 @@ class BaseAdapter(LoggerMixin, ABC):
         ...
 
     @abstractmethod
-    async def connect(self) -> AsyncIterator[EventRecord]:
+    async def connect(
+        self, tickers: Sequence[str]
+    ) -> AsyncIterator[EventRecord]:
         """Open a WebSocket connection and yield normalized events.
 
-        Milestone 1.2 -- not implemented in 1.1.
+        Args:
+            tickers: Market tickers to subscribe to.
         """
         ...
         # Unreachable, but satisfies the async iterator type.

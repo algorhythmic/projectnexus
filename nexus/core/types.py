@@ -20,6 +20,7 @@ class EventType(str, Enum):
     VOLUME_UPDATE = "volume_update"
     STATUS_CHANGE = "status_change"
     NEW_MARKET = "new_market"
+    TRADE = "trade"
 
 
 class MarketRecord(BaseModel):
