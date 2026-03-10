@@ -44,8 +44,22 @@ class Settings(BaseSettings):
     )
 
     # Storage
+    store_backend: str = Field(
+        default="sqlite",
+        description="Storage backend: 'sqlite' or 'postgres'",
+    )
     sqlite_path: str = Field(
         default="data/nexus.db", description="SQLite database file path"
+    )
+    postgres_dsn: str = Field(
+        default="",
+        description="PostgreSQL connection string (e.g. postgresql://user:pass@host/db)",
+    )
+    postgres_pool_min: int = Field(
+        default=2, description="Minimum connections in asyncpg pool"
+    )
+    postgres_pool_max: int = Field(
+        default=10, description="Maximum connections in asyncpg pool"
     )
 
     # Polling

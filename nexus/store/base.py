@@ -70,6 +70,11 @@ class BaseStore(ABC):
         """Return total number of events."""
         ...
 
+    @abstractmethod
+    async def get_event_time_range(self) -> Tuple[Optional[int], Optional[int]]:
+        """Return (min_timestamp, max_timestamp) across all events, or (None, None)."""
+        ...
+
     # ------------------------------------------------------------------
     # Data integrity queries (Milestone 1.3)
     # ------------------------------------------------------------------

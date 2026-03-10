@@ -282,6 +282,15 @@ class SQLiteStore(BaseStore, LoggerMixin):
         row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def get_event_time_range(self) -> Tuple[Optional[int], Optional[int]]:
+        cursor = await self.db.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM events"
+        )
+        row = await cursor.fetchone()
+        if row and row[0] is not None:
+            return (row[0], row[1])
+        return (None, None)
+
     # ------------------------------------------------------------------
     # Data integrity queries (Milestone 1.3)
     # ------------------------------------------------------------------

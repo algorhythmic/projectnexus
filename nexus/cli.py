@@ -64,7 +64,12 @@ def info() -> None:
     table.add_row("Demo Mode", str(settings.kalshi_use_demo))
     table.add_row("Polymarket Enabled", str(settings.polymarket_enabled))
     table.add_row("Polymarket URL", settings.polymarket_base_url)
-    table.add_row("SQLite Path", settings.sqlite_path)
+    table.add_row("Store Backend", settings.store_backend)
+    if settings.store_backend == "postgres":
+        table.add_row("Postgres DSN", settings.postgres_dsn.split("@")[-1] if settings.postgres_dsn else "(not set)")
+        table.add_row("PG Pool", f"{settings.postgres_pool_min}-{settings.postgres_pool_max}")
+    else:
+        table.add_row("SQLite Path", settings.sqlite_path)
     table.add_row("Discovery Interval", f"{settings.discovery_interval_seconds}s")
     table.add_row("Rate Limit", f"{settings.kalshi_reads_per_second} reads/sec")
 
@@ -73,35 +78,32 @@ def info() -> None:
 
 @app.command(name="db-init")
 def db_init() -> None:
-    """Initialize the SQLite event store (create tables)."""
-    from nexus.store.sqlite import SQLiteStore
+    """Initialize the event store (create tables)."""
+    from nexus.store import create_store
 
     async def _init() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
         await store.close()
 
     asyncio.run(_init())
-    console.print(f"Database initialized at [bold]{settings.sqlite_path}[/bold]")
+    backend = settings.store_backend
+    location = settings.postgres_dsn.split("@")[-1] if backend == "postgres" else settings.sqlite_path
+    console.print(f"Database initialized ({backend}) at [bold]{location}[/bold]")
 
 
 @app.command(name="db-stats")
 def db_stats() -> None:
     """Show event store statistics."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _stats() -> dict:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
         mc = await store.get_market_count()
         ec = await store.get_event_count()
         dist = await store.get_event_type_distribution()
-        # Get time range
-        cursor = await store.db.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM events"
-        )
-        row = await cursor.fetchone()
-        min_ts, max_ts = (row[0], row[1]) if row else (None, None)
+        min_ts, max_ts = await store.get_event_time_range()
         await store.close()
         return {
             "markets": mc, "events": ec, "distribution": dist,
@@ -115,7 +117,9 @@ def db_stats() -> None:
     table.add_column("Value", style="green")
     table.add_row("Markets", str(data["markets"]))
     table.add_row("Events", str(data["events"]))
-    table.add_row("Database", settings.sqlite_path)
+    backend = settings.store_backend
+    location = settings.postgres_dsn.split("@")[-1] if backend == "postgres" else settings.sqlite_path
+    table.add_row("Database", f"{backend}: {location}")
     if data["min_ts"] and data["max_ts"]:
         duration_h = (data["max_ts"] - data["min_ts"]) / 1000 / 3600
         table.add_row("Time span", f"{duration_h:.1f} hours")
@@ -132,10 +136,10 @@ def discover(
 ) -> None:
     """Run a single discovery cycle (one-shot, no loop)."""
     from nexus.ingestion.discovery import DiscoveryLoop
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _discover() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         adapters = _build_adapters(platform)
@@ -173,10 +177,10 @@ def run(
     from nexus.ingestion.bus import EventBus
     from nexus.ingestion.manager import IngestionManager
     from nexus.ingestion.metrics import MetricsCollector
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _run() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         metrics = MetricsCollector()
@@ -239,10 +243,10 @@ def poll(
 ) -> None:
     """Start discovery-only polling loop (no WebSocket)."""
     from nexus.ingestion.discovery import DiscoveryLoop
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _poll() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         adapters = _build_adapters(platform)
@@ -285,10 +289,10 @@ def stream(
     platform: str = typer.Option("kalshi", help="Platform: kalshi or polymarket"),
 ) -> None:
     """Stream WebSocket events to console (debug tool, no storage)."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _stream() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
         markets = await store.get_active_markets(platform=platform)
         tickers = [m.external_id for m in markets]
@@ -334,10 +338,10 @@ def validate(
     since_hours: int = typer.Option(0, help="Only check events from last N hours (0=all)"),
 ) -> None:
     """Run data integrity checks and evaluate the Decision Gate."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _validate() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         since = None
@@ -355,12 +359,7 @@ def validate(
         violations = await store.get_ordering_violations(since=since)
         distribution = await store.get_event_type_distribution(since=since)
 
-        # Time range
-        cursor = await store.db.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM events"
-        )
-        row = await cursor.fetchone()
-        min_ts, max_ts = (row[0], row[1]) if row else (None, None)
+        min_ts, max_ts = await store.get_event_time_range()
         await store.close()
 
         # Main report
@@ -451,10 +450,10 @@ def validate(
 def detect() -> None:
     """Run a single anomaly detection cycle (includes cluster correlation)."""
     from nexus.correlation.detection_loop import DetectionLoop
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _detect() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         loop = DetectionLoop(
@@ -483,10 +482,10 @@ def anomalies(
 ) -> None:
     """List recent anomalies."""
     from nexus.core.types import AnomalyStatus
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _anomalies() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         since = int((time.time() - since_hours * 3600) * 1000) if since_hours > 0 else None
@@ -547,10 +546,10 @@ def anomaly_stats(
     hours: int = typer.Option(24, help="Analysis window in hours"),
 ) -> None:
     """Show anomaly signal quality statistics."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _stats() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         now_ms = int(time.time() * 1000)
@@ -600,10 +599,10 @@ def anomaly_stats(
 def correlate() -> None:
     """Run a single cluster correlation cycle (standalone, no single-market detection)."""
     from nexus.correlation.correlator import ClusterCorrelator
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _correlate() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         correlator = ClusterCorrelator(
@@ -626,10 +625,10 @@ def signal_report(
 ) -> None:
     """Show Decision Gate signal analysis for cluster correlation."""
     from nexus.core.types import AnomalyType
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _report() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         now_ms = int(time.time() * 1000)
@@ -735,10 +734,10 @@ def cluster(
     """Run topic clustering on unassigned markets."""
     from nexus.clustering.clusterer import TopicClusterer
     from nexus.clustering.llm_client import ClaudeClient
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _cluster() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         unassigned = await store.get_unassigned_markets()
@@ -786,10 +785,10 @@ def clusters(
     show_markets: bool = typer.Option(False, help="Show markets in each cluster"),
 ) -> None:
     """List all topic clusters."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _clusters() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         all_clusters = await store.get_clusters()
@@ -830,10 +829,10 @@ def clusters(
 @app.command(name="cluster-stats")
 def cluster_stats() -> None:
     """Show topic clustering quality statistics."""
-    from nexus.store.sqlite import SQLiteStore
+    from nexus.store import create_store
 
     async def _stats() -> None:
-        store = SQLiteStore(settings.sqlite_path)
+        store = create_store(settings)
         await store.initialize()
 
         total_markets = await store.get_market_count()
@@ -863,6 +862,124 @@ def cluster_stats() -> None:
         await store.close()
 
     asyncio.run(_stats())
+
+
+@app.command(name="db-migrate")
+def db_migrate() -> None:
+    """Migrate data from SQLite to PostgreSQL."""
+    from nexus.store.sqlite import SQLiteStore
+
+    if settings.store_backend != "postgres":
+        console.print("[bold red]store_backend must be 'postgres' for migration.[/bold red]")
+        raise typer.Exit(1)
+    if not settings.postgres_dsn:
+        console.print("[bold red]POSTGRES_DSN is not set.[/bold red]")
+        raise typer.Exit(1)
+
+    async def _migrate() -> None:
+        from nexus.store.postgres import PostgresStore
+
+        src = SQLiteStore(settings.sqlite_path)
+        await src.initialize()
+        dst = PostgresStore(
+            dsn=settings.postgres_dsn,
+            pool_min=settings.postgres_pool_min,
+            pool_max=settings.postgres_pool_max,
+        )
+        await dst.initialize()
+
+        # Migrate markets
+        console.print("Migrating markets...")
+        active = await src.get_active_markets()
+        from nexus.core.types import DiscoveredMarket
+        discovered = [
+            DiscoveredMarket(
+                platform=m.platform,
+                external_id=m.external_id,
+                title=m.title,
+                description=m.description,
+                category=m.category,
+                is_active=m.is_active,
+            )
+            for m in active
+        ]
+        new_m = await dst.upsert_markets(discovered)
+        console.print(f"  Markets migrated: {new_m} new, {len(active)} total")
+
+        # Migrate events in batches
+        console.print("Migrating events...")
+        total_events = await src.get_event_count()
+        batch_size = 5000
+        migrated = 0
+        # Get events in timestamp-ascending order using get_events
+        offset_ts = 0
+        while True:
+            # Get a batch of events since offset
+            events = await src.get_events(since=offset_ts, limit=batch_size)
+            if not events:
+                break
+            # get_events returns DESC order, reverse for chronological
+            events.reverse()
+            inserted = await dst.insert_events(events)
+            migrated += inserted
+            # Move offset past the last event
+            offset_ts = events[-1].timestamp + 1
+            console.print(f"  {migrated}/{total_events} events migrated...")
+
+        # Migrate clusters
+        console.print("Migrating topic clusters...")
+        clusters = await src.get_clusters()
+        for c in clusters:
+            await dst.insert_cluster(c)
+            # Migrate memberships
+            members = await src.get_cluster_markets(c.id)
+            for mid, conf in members:
+                # Look up market in destination by platform+external_id
+                src_market = None
+                for m in active:
+                    if m.id == mid:
+                        src_market = m
+                        break
+                if src_market:
+                    dst_market = await dst.get_market_by_external_id(
+                        src_market.platform.value, src_market.external_id
+                    )
+                    if dst_market and dst_market.id is not None:
+                        await dst.assign_market_to_cluster(dst_market.id, c.id, conf)
+        console.print(f"  Clusters migrated: {len(clusters)}")
+
+        # Refresh materialized views
+        console.print("Refreshing materialized views...")
+        await dst.refresh_views(concurrently=False)
+
+        await src.close()
+        await dst.close()
+        console.print("[bold green]Migration complete![/bold green]")
+
+    asyncio.run(_migrate())
+
+
+@app.command(name="refresh-views")
+def refresh_views() -> None:
+    """Refresh PostgreSQL materialized views."""
+    if settings.store_backend != "postgres":
+        console.print("[bold red]refresh-views requires store_backend='postgres'[/bold red]")
+        raise typer.Exit(1)
+
+    async def _refresh() -> None:
+        from nexus.store.postgres import PostgresStore
+
+        store = PostgresStore(
+            dsn=settings.postgres_dsn,
+            pool_min=settings.postgres_pool_min,
+            pool_max=settings.postgres_pool_max,
+        )
+        await store.initialize()
+        await store.refresh_views()
+        await store.close()
+        console.print("[bold green]Materialized views refreshed.[/bold green]")
+
+    asyncio.run(_refresh())
 
 
 if __name__ == "__main__":

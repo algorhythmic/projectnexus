@@ -1,11 +1,18 @@
 """Shared pytest fixtures for Nexus tests."""
 
+import os
+
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 
 from nexus.core.config import Settings
 from nexus.store.sqlite import SQLiteStore
+
+
+def _pg_dsn() -> str:
+    """Return the TEST_POSTGRES_DSN env var, or empty string."""
+    return os.environ.get("TEST_POSTGRES_DSN", "")
 
 
 @pytest.fixture
@@ -46,3 +53,29 @@ def sample_settings(tmp_path):
         kalshi_api_key="test-key-123",
         kalshi_private_key_path="",
     )
+
+
+@pytest.fixture
+async def pg_store():
+    """Provides an initialized PostgresStore for integration tests.
+
+    Requires TEST_POSTGRES_DSN env var. Truncates all tables after each test.
+    """
+    dsn = _pg_dsn()
+    if not dsn:
+        pytest.skip("TEST_POSTGRES_DSN not set")
+
+    from nexus.store.postgres import PostgresStore
+
+    store = PostgresStore(dsn=dsn, pool_min=1, pool_max=3)
+    await store.initialize()
+    yield store
+
+    # Clean up: truncate all tables
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            """TRUNCATE anomaly_markets, anomalies,
+                      market_cluster_memberships, topic_clusters,
+                      events, markets CASCADE"""
+        )
+    await store.close()
