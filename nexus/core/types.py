@@ -79,6 +79,7 @@ class AnomalyType(str, Enum):
 
     SINGLE_MARKET = "single_market"
     CLUSTER = "cluster"
+    CROSS_PLATFORM = "cross_platform"
 
 
 class AnomalyStatus(str, Enum):
@@ -166,3 +167,14 @@ class ClusterAssignment(BaseModel):
     cluster_name: str
     confidence: float  # 0.0-1.0
     assigned_at: int  # Unix ms
+
+
+class CrossPlatformLink(BaseModel):
+    """A semantic equivalence link between markets on different platforms."""
+
+    id: Optional[int] = None
+    market_id_a: int  # Market on platform A
+    market_id_b: int  # Market on platform B
+    confidence: float  # 0.0-1.0
+    method: str  # "cluster" (same cluster, different platforms) or "llm"
+    created_at: int  # Unix ms

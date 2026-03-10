@@ -13,6 +13,7 @@ from nexus.core.types import (
     AnomalyRecord,
     AnomalyStatus,
     AnomalyType,
+    CrossPlatformLink,
     DiscoveredMarket,
     EventRecord,
     EventType,
@@ -104,6 +105,23 @@ CREATE TABLE IF NOT EXISTS anomaly_markets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomaly_markets_market_id ON anomaly_markets(market_id);
+
+-- Phase 3: Cross-platform links (Milestone 3.3)
+
+CREATE TABLE IF NOT EXISTS cross_platform_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_id_a INTEGER NOT NULL,
+    market_id_b INTEGER NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    method TEXT NOT NULL DEFAULT 'cluster',
+    created_at INTEGER NOT NULL,
+    UNIQUE(market_id_a, market_id_b),
+    FOREIGN KEY (market_id_a) REFERENCES markets(id),
+    FOREIGN KEY (market_id_b) REFERENCES markets(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cross_platform_links_a ON cross_platform_links(market_id_a);
+CREATE INDEX IF NOT EXISTS idx_cross_platform_links_b ON cross_platform_links(market_id_b);
 """
 
 
@@ -611,6 +629,61 @@ class SQLiteStore(BaseStore, LoggerMixin):
         return [self._row_to_market(r) for r in rows]
 
     # ------------------------------------------------------------------
+    # Cross-platform links (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    async def upsert_cross_platform_link(self, link: CrossPlatformLink) -> int:
+        # Normalize ordering: lower market_id first
+        a, b = sorted([link.market_id_a, link.market_id_b])
+        cursor = await self.db.execute(
+            """INSERT OR REPLACE INTO cross_platform_links
+               (market_id_a, market_id_b, confidence, method, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (a, b, link.confidence, link.method, link.created_at),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_cross_platform_links(
+        self, market_id: Optional[int] = None
+    ) -> List[CrossPlatformLink]:
+        if market_id is not None:
+            cursor = await self.db.execute(
+                """SELECT * FROM cross_platform_links
+                   WHERE market_id_a = ? OR market_id_b = ?
+                   ORDER BY confidence DESC""",
+                (market_id, market_id),
+            )
+        else:
+            cursor = await self.db.execute(
+                "SELECT * FROM cross_platform_links ORDER BY confidence DESC"
+            )
+        rows = await cursor.fetchall()
+        return [self._row_to_cross_platform_link(r) for r in rows]
+
+    async def get_cross_platform_pair(
+        self, market_id_a: int, market_id_b: int
+    ) -> Optional[CrossPlatformLink]:
+        a, b = sorted([market_id_a, market_id_b])
+        cursor = await self.db.execute(
+            "SELECT * FROM cross_platform_links WHERE market_id_a = ? AND market_id_b = ?",
+            (a, b),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_cross_platform_link(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Data retention (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    async def prune_events(self, older_than: int) -> int:
+        cursor = await self.db.execute(
+            "DELETE FROM events WHERE timestamp < ?", (older_than,)
+        )
+        await self.db.commit()
+        return cursor.rowcount
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -681,4 +754,15 @@ class SQLiteStore(BaseStore, LoggerMixin):
             market_id=row[1],
             price_delta=row[2],
             volume_ratio=row[3],
+        )
+
+    @staticmethod
+    def _row_to_cross_platform_link(row: aiosqlite.Row) -> CrossPlatformLink:
+        return CrossPlatformLink(
+            id=row[0],
+            market_id_a=row[1],
+            market_id_b=row[2],
+            confidence=row[3],
+            method=row[4],
+            created_at=row[5],
         )

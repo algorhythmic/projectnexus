@@ -463,6 +463,9 @@ def detect() -> None:
             expiry_hours=settings.anomaly_expiry_hours,
             cluster_min_markets=settings.cluster_anomaly_min_markets,
             cluster_window_minutes=settings.cluster_anomaly_window_minutes,
+            cross_platform_enabled=settings.cross_platform_enabled,
+            cross_platform_window_minutes=settings.cross_platform_window_minutes,
+            retention_days=settings.retention_days,
         )
         count = await loop.run_once()
         await store.close()
@@ -477,7 +480,7 @@ def anomalies(
     since_hours: int = typer.Option(24, help="Show anomalies from last N hours"),
     min_severity: float = typer.Option(0.0, help="Minimum severity threshold"),
     status: str = typer.Option("", help="Filter by status (active/expired/acknowledged)"),
-    anomaly_type: str = typer.Option("", help="Filter by type (single_market/cluster)"),
+    anomaly_type: str = typer.Option("", help="Filter by type (single_market/cluster/cross_platform)"),
     limit: int = typer.Option(50, help="Max anomalies to show"),
 ) -> None:
     """List recent anomalies."""
@@ -980,6 +983,76 @@ def refresh_views() -> None:
         console.print("[bold green]Materialized views refreshed.[/bold green]")
 
     asyncio.run(_refresh())
+
+
+@app.command(name="cross-platform")
+def cross_platform() -> None:
+    """Build cross-platform links and run cross-platform correlation."""
+    from nexus.correlation.cross_platform import CrossPlatformCorrelator
+    from nexus.store import create_store
+
+    async def _xplat() -> None:
+        store = create_store(settings)
+        await store.initialize()
+
+        correlator = CrossPlatformCorrelator(
+            store=store,
+            window_minutes=settings.cross_platform_window_minutes,
+        )
+
+        links = await correlator.build_links()
+        console.print(f"Cross-platform links created/updated: {links}")
+
+        now_ms = int(time.time() * 1000)
+        count = await correlator.correlate_and_store(now_ms)
+        console.print(f"Cross-platform anomalies detected: {count}")
+
+        await store.close()
+
+    asyncio.run(_xplat())
+
+
+@app.command()
+def prune(
+    days: int = typer.Option(0, help="Delete events older than N days (0 = use config)"),
+    dry_run: bool = typer.Option(False, help="Show what would be deleted without deleting"),
+) -> None:
+    """Prune old events from the event store."""
+    from nexus.store import create_store
+
+    retention = days if days > 0 else settings.retention_days
+    if retention <= 0:
+        console.print("[bold red]No retention period set. Use --days or set RETENTION_DAYS.[/bold red]")
+        raise typer.Exit(1)
+
+    async def _prune() -> None:
+        store = create_store(settings)
+        await store.initialize()
+
+        cutoff_ms = int((time.time() - retention * 86400) * 1000)
+        total_events = await store.get_event_count()
+
+        if dry_run:
+            # Count events that would be pruned
+            min_ts, max_ts = await store.get_event_time_range()
+            if min_ts and min_ts < cutoff_ms:
+                count = await store.get_event_count_in_range(min_ts, cutoff_ms - 1)
+                console.print(
+                    f"[yellow]Dry run:[/yellow] would delete {count} of {total_events} "
+                    f"events older than {retention} days"
+                )
+            else:
+                console.print(f"No events older than {retention} days to prune")
+        else:
+            pruned = await store.prune_events(cutoff_ms)
+            console.print(
+                f"Pruned {pruned} events older than {retention} days "
+                f"({total_events - pruned} remaining)"
+            )
+
+        await store.close()
+
+    asyncio.run(_prune())
 
 
 if __name__ == "__main__":

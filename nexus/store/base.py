@@ -7,6 +7,7 @@ from nexus.core.types import (
     AnomalyMarketRecord,
     AnomalyRecord,
     AnomalyStatus,
+    CrossPlatformLink,
     DiscoveredMarket,
     EventRecord,
     MarketRecord,
@@ -218,6 +219,39 @@ class BaseStore(ABC):
     @abstractmethod
     async def get_unassigned_markets(self) -> List[MarketRecord]:
         """Get active markets not in any cluster."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Cross-platform links (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def upsert_cross_platform_link(self, link: CrossPlatformLink) -> int:
+        """Insert or update a cross-platform link. Returns the link id."""
+        ...
+
+    @abstractmethod
+    async def get_cross_platform_links(
+        self, market_id: Optional[int] = None
+    ) -> List[CrossPlatformLink]:
+        """Get cross-platform links, optionally filtered by market_id."""
+        ...
+
+    @abstractmethod
+    async def get_cross_platform_pair(
+        self, market_id_a: int, market_id_b: int
+    ) -> Optional[CrossPlatformLink]:
+        """Look up a specific cross-platform link between two markets."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Data retention (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def prune_events(self, older_than: int) -> int:
+        """Delete events with timestamp < older_than (Unix ms).
+        Returns count of deleted events."""
         ...
 
     @abstractmethod

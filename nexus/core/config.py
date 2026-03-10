@@ -198,6 +198,22 @@ class Settings(BaseSettings):
         description="Time window (minutes) to check for concurrent anomalies",
     )
 
+    # Cross-Platform Correlation (Milestone 3.3)
+    cross_platform_enabled: bool = Field(
+        default=True,
+        description="Enable cross-platform link detection and correlation",
+    )
+    cross_platform_window_minutes: int = Field(
+        default=60,
+        description="Time window (minutes) to check for cross-platform anomaly pairs",
+    )
+
+    # Data Retention (Milestone 3.3)
+    retention_days: int = Field(
+        default=0,
+        description="Delete events older than N days (0 = keep forever)",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

@@ -12,6 +12,7 @@ from nexus.core.types import (
     AnomalyRecord,
     AnomalyStatus,
     AnomalyType,
+    CrossPlatformLink,
     DiscoveredMarket,
     EventRecord,
     EventType,
@@ -97,6 +98,19 @@ CREATE TABLE IF NOT EXISTS anomaly_markets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomaly_markets_market_id ON anomaly_markets(market_id);
+
+CREATE TABLE IF NOT EXISTS cross_platform_links (
+    id BIGSERIAL PRIMARY KEY,
+    market_id_a BIGINT NOT NULL REFERENCES markets(id),
+    market_id_b BIGINT NOT NULL REFERENCES markets(id),
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    method TEXT NOT NULL DEFAULT 'cluster',
+    created_at BIGINT NOT NULL,
+    UNIQUE(market_id_a, market_id_b)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cross_platform_links_a ON cross_platform_links(market_id_a);
+CREATE INDEX IF NOT EXISTS idx_cross_platform_links_b ON cross_platform_links(market_id_b);
 """
 
 # Materialized views for common read patterns
@@ -729,6 +743,66 @@ class PostgresStore(BaseStore, LoggerMixin):
         return [self._row_to_market(r) for r in rows]
 
     # ------------------------------------------------------------------
+    # Cross-platform links (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    async def upsert_cross_platform_link(self, link: CrossPlatformLink) -> int:
+        a, b = sorted([link.market_id_a, link.market_id_b])
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO cross_platform_links
+                   (market_id_a, market_id_b, confidence, method, created_at)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (market_id_a, market_id_b) DO UPDATE
+                   SET confidence = EXCLUDED.confidence,
+                       method = EXCLUDED.method,
+                       created_at = EXCLUDED.created_at
+                   RETURNING id""",
+                a, b, link.confidence, link.method, link.created_at,
+            )
+        return row["id"]
+
+    async def get_cross_platform_links(
+        self, market_id: Optional[int] = None
+    ) -> List[CrossPlatformLink]:
+        async with self.pool.acquire() as conn:
+            if market_id is not None:
+                rows = await conn.fetch(
+                    """SELECT * FROM cross_platform_links
+                       WHERE market_id_a = $1 OR market_id_b = $1
+                       ORDER BY confidence DESC""",
+                    market_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM cross_platform_links ORDER BY confidence DESC"
+                )
+        return [self._row_to_cross_platform_link(r) for r in rows]
+
+    async def get_cross_platform_pair(
+        self, market_id_a: int, market_id_b: int
+    ) -> Optional[CrossPlatformLink]:
+        a, b = sorted([market_id_a, market_id_b])
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM cross_platform_links WHERE market_id_a = $1 AND market_id_b = $2",
+                a, b,
+            )
+        return self._row_to_cross_platform_link(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Data retention (Milestone 3.3)
+    # ------------------------------------------------------------------
+
+    async def prune_events(self, older_than: int) -> int:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM events WHERE timestamp < $1", older_than
+            )
+        # asyncpg returns "DELETE N"
+        return int(result.split()[-1])
+
+    # ------------------------------------------------------------------
     # Materialized views
     # ------------------------------------------------------------------
 
@@ -819,4 +893,15 @@ class PostgresStore(BaseStore, LoggerMixin):
             description=row["description"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_cross_platform_link(row: asyncpg.Record) -> CrossPlatformLink:
+        return CrossPlatformLink(
+            id=row["id"],
+            market_id_a=row["market_id_a"],
+            market_id_b=row["market_id_b"],
+            confidence=row["confidence"],
+            method=row["method"],
+            created_at=row["created_at"],
         )
