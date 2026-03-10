@@ -1055,5 +1055,66 @@ def prune(
     asyncio.run(_prune())
 
 
+@app.command()
+def sync(
+    once: bool = typer.Option(False, help="Run one sync cycle and exit"),
+) -> None:
+    """Start the Convex sync layer (PostgreSQL → Convex)."""
+    if settings.store_backend != "postgres":
+        console.print("[bold red]Sync requires store_backend='postgres'[/bold red]")
+        raise typer.Exit(1)
+    if not settings.convex_deployment_url or not settings.convex_deploy_key:
+        console.print(
+            "[bold red]CONVEX_DEPLOYMENT_URL and CONVEX_DEPLOY_KEY must be set.[/bold red]"
+        )
+        raise typer.Exit(1)
+
+    async def _sync() -> None:
+        from nexus.store.postgres import PostgresStore
+        from nexus.sync import ConvexClient, SyncLayer
+
+        store = PostgresStore(
+            dsn=settings.postgres_dsn,
+            pool_min=settings.postgres_pool_min,
+            pool_max=settings.postgres_pool_max,
+        )
+        await store.initialize()
+
+        convex = ConvexClient(
+            deployment_url=settings.convex_deployment_url,
+            deploy_key=settings.convex_deploy_key,
+        )
+
+        layer = SyncLayer(
+            store=store,
+            convex=convex,
+            market_interval=settings.sync_market_interval_seconds,
+            summary_interval=settings.sync_summary_interval_seconds,
+            topics_interval=settings.sync_topics_interval_seconds,
+        )
+
+        if once:
+            results = await layer.sync_all()
+            console.print(f"Sync complete: {results}")
+        else:
+            console.print(
+                f"Starting sync loop (markets: {settings.sync_market_interval_seconds}s, "
+                f"summaries: {settings.sync_summary_interval_seconds}s, "
+                f"topics: {settings.sync_topics_interval_seconds}s). Ctrl-c to stop."
+            )
+            try:
+                await layer.run_forever()
+            except asyncio.CancelledError:
+                pass
+
+        await convex.close()
+        await store.close()
+
+    try:
+        asyncio.run(_sync())
+    except KeyboardInterrupt:
+        console.print("\nSync stopped.")
+
+
 if __name__ == "__main__":
     app()

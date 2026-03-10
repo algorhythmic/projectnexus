@@ -214,6 +214,28 @@ class Settings(BaseSettings):
         description="Delete events older than N days (0 = keep forever)",
     )
 
+    # Convex Sync (Phase 4)
+    convex_deployment_url: str = Field(
+        default="",
+        description="Convex deployment URL (e.g. https://your-deployment.convex.cloud)",
+    )
+    convex_deploy_key: str = Field(
+        default="",
+        description="Convex deploy key for server-to-server auth",
+    )
+    sync_market_interval_seconds: int = Field(
+        default=30,
+        description="Sync market state to Convex every N seconds",
+    )
+    sync_summary_interval_seconds: int = Field(
+        default=120,
+        description="Sync market summaries to Convex every N seconds",
+    )
+    sync_topics_interval_seconds: int = Field(
+        default=300,
+        description="Sync trending topics to Convex every N seconds",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

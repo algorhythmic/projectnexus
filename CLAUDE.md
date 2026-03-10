@@ -17,12 +17,14 @@ What exists:
 - CLI (`nexus info`, `nexus db-init`, `nexus db-stats`, `nexus discover`, `nexus run`)
 - 35 passing tests
 
+**Completed milestones:**
+- Phase 1: Kalshi adapter, WebSocket streaming, stability monitoring (Milestones 1.1–1.3)
+- Phase 2: Anomaly detection, topic clustering, cluster correlation (Milestones 2.1–2.3)
+- Phase 3: Polymarket adapter, PostgreSQL migration, cross-platform correlation (Milestones 3.1–3.3)
+- Phase 4, Milestone 4.1: Convex sync layer (PostgreSQL → Convex)
+
 **Next milestones:**
-- Milestone 1.2: Kalshi WebSocket adapter (`connect()` method) — real-time streaming
-- Milestone 1.3: 72-hour stability testing
-- Phase 2: Anomaly detection, topic graph, correlation engine
-- Phase 3: Polymarket adapter, PostgreSQL migration
-- Phase 4: Convex sync layer, webapp integration
+- Phase 4, Milestone 4.2: Webapp updates (MarketFinder integration)
 - Phase 5: LLM narrative layer
 
 ## Repository Layout
@@ -33,9 +35,9 @@ projectnexus/                   # Git root
 │   ├── core/                   # config.py, logging.py, types.py
 │   ├── adapters/               # auth.py, base.py, kalshi.py, polymarket.py (stub)
 │   ├── ingestion/              # discovery.py, bus.py (stub)
-│   ├── store/                  # base.py, sqlite.py, postgres.py (stub)
-│   ├── correlation/            # Phase 2 stub
-│   ├── sync/                   # Phase 3 stub
+│   ├── store/                  # base.py, sqlite.py, postgres.py
+│   ├── correlation/            # detector, correlator, cross_platform
+│   ├── sync/                   # convex_client.py, sync.py
 │   └── cli.py
 ├── sql/                        # schema.sql, migrations/, views/
 ├── tests/                      # pytest suite

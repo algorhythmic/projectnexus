@@ -803,7 +803,35 @@ class PostgresStore(BaseStore, LoggerMixin):
         return int(result.split()[-1])
 
     # ------------------------------------------------------------------
-    # Materialized views
+    # Materialized view queries (Phase 4 sync layer)
+    # ------------------------------------------------------------------
+
+    async def query_market_state(self) -> List[dict]:
+        """Read v_current_market_state for sync."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM v_current_market_state")
+        return [dict(r) for r in rows]
+
+    async def query_active_anomalies(self) -> List[dict]:
+        """Read v_active_anomalies for sync."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM v_active_anomalies")
+        return [dict(r) for r in rows]
+
+    async def query_trending_topics(self) -> List[dict]:
+        """Read v_trending_topics for sync."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM v_trending_topics")
+        return [dict(r) for r in rows]
+
+    async def query_market_summaries(self) -> List[dict]:
+        """Read v_market_summaries for sync."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM v_market_summaries")
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Materialized view management
     # ------------------------------------------------------------------
 
     async def refresh_views(self, concurrently: bool = True) -> None:
