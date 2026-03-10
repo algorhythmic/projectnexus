@@ -1,0 +1,31 @@
+# Fly.io configuration for Nexus
+# Deploy: fly launch --no-deploy && fly secrets set ... && fly deploy
+
+app = "projectnexus"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  build-target = "production"
+
+# Nexus is a worker process, not a web server.
+# No HTTP services, no health check endpoints.
+[processes]
+  worker = "nexus run --platform all"
+
+# Machine sizing — start small, scale as needed
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["worker"]
+
+# Environment variables (non-secret)
+# Secrets are set via: fly secrets set POSTGRES_DSN=... CONVEX_DEPLOY_KEY=... etc.
+[env]
+  STORE_BACKEND = "postgres"
+  KALSHI_USE_DEMO = "true"
+  POLYMARKET_ENABLED = "false"
+  LOG_LEVEL = "INFO"
+  DISCOVERY_INTERVAL_SECONDS = "60"
+  CROSS_PLATFORM_ENABLED = "true"
+  RETENTION_DAYS = "90"

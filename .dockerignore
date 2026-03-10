@@ -1,0 +1,15 @@
+.venv/
+.env
+.env.*
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+data/
+tests/
+marketfinder-main/
+marketfinder_ETL-main/
+*.md
+!nexus/**
