@@ -107,11 +107,18 @@ class KalshiAdapter(BaseAdapter):
         self._api_key = settings.kalshi_api_key
         self._private_key: Optional[RSAPrivateKey] = None
         self._key_path = settings.kalshi_private_key_path
+        self._key_pem = settings.kalshi_private_key_pem
 
-        # Load key if path is configured
-        if self._key_path:
+        # Load key from PEM string (containerized) or file path
+        key_source = None
+        if self._key_pem:
+            key_source = self._key_pem.encode("utf-8")
+        elif self._key_path:
+            key_source = self._key_path
+
+        if key_source:
             try:
-                self._private_key = load_private_key(self._key_path)
+                self._private_key = load_private_key(key_source)
                 self.logger.info("Kalshi RSA private key loaded")
             except Exception as exc:
                 self.logger.warning(

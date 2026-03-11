@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     kalshi_private_key_path: str = Field(
         default="", description="Path to RSA private key PEM file"
     )
+    kalshi_private_key_pem: str = Field(
+        default="",
+        description="RSA private key PEM content (alternative to file path, for containerized deployments)",
+    )
     kalshi_base_url: str = Field(
         default="https://trading-api.kalshi.com/trade-api/v2",
         description="Kalshi production API base URL",
