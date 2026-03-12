@@ -348,11 +348,21 @@ class KalshiAdapter(BaseAdapter):
             return None
 
         payload = msg.get("msg", {})
-        yes_price = payload.get("yes_ask") or payload.get("yes_bid") or payload.get("last_price")
+        # Kalshi WS v2 uses *_dollars suffix (e.g. yes_ask_dollars, price_dollars)
+        # Fall back to legacy field names for compatibility
+        yes_price = (
+            payload.get("yes_ask_dollars")
+            or payload.get("yes_bid_dollars")
+            or payload.get("price_dollars")
+            or payload.get("yes_ask")
+            or payload.get("yes_bid")
+            or payload.get("last_price")
+        )
         if yes_price is None:
             return None
 
         price = float(yes_price)
+        # Dollars format is already 0.0-1.0; legacy cents format was 0-100
         if price > 1.0:
             price /= 100.0
 
@@ -363,11 +373,11 @@ class KalshiAdapter(BaseAdapter):
             new_value=price,
             metadata=json.dumps({
                 "ticker": market_ticker,
-                "yes_ask": payload.get("yes_ask"),
-                "yes_bid": payload.get("yes_bid"),
-                "no_ask": payload.get("no_ask"),
-                "no_bid": payload.get("no_bid"),
-                "volume": payload.get("volume"),
+                "yes_ask": payload.get("yes_ask_dollars") or payload.get("yes_ask"),
+                "yes_bid": payload.get("yes_bid_dollars") or payload.get("yes_bid"),
+                "no_ask": payload.get("no_ask_dollars") or payload.get("no_ask"),
+                "no_bid": payload.get("no_bid_dollars") or payload.get("no_bid"),
+                "volume": payload.get("volume_fp") or payload.get("volume"),
             }),
             timestamp=now_ms,
         )
@@ -381,7 +391,11 @@ class KalshiAdapter(BaseAdapter):
             return None
 
         payload = msg.get("msg", {})
-        yes_price = payload.get("yes_price")
+        yes_price = (
+            payload.get("yes_price_dollars")
+            or payload.get("yes_price")
+            or payload.get("price_dollars")
+        )
         if yes_price is None:
             return None
 
@@ -399,7 +413,7 @@ class KalshiAdapter(BaseAdapter):
                 "count": payload.get("count"),
                 "side": payload.get("side"),
                 "taker_side": payload.get("taker_side"),
-                "no_price": payload.get("no_price"),
+                "no_price": payload.get("no_price_dollars") or payload.get("no_price"),
             }),
             timestamp=now_ms,
         )

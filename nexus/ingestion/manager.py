@@ -54,6 +54,10 @@ class IngestionManager(LoggerMixin):
         # Tickers currently subscribed via WebSocket
         self._subscribed_tickers: Set[str] = set()
 
+        # Coordination between discovery and streaming tasks
+        self._first_discovery_done = asyncio.Event()
+        self._resubscribe_needed = asyncio.Event()
+
     async def run(self) -> None:
         """Start discovery + streaming concurrently.
 
@@ -108,8 +112,20 @@ class IngestionManager(LoggerMixin):
     # ------------------------------------------------------------------
 
     async def _build_ticker_cache(self) -> None:
-        """Populate the ticker→market_id cache from the store."""
+        """Populate the ticker→market_id cache from the store.
+
+        Markets are sorted by last_updated_at DESC so that the most
+        recently active markets appear first in the dict.  This matters
+        because ws_max_subscriptions limits how many tickers we subscribe
+        to — we want the freshest ones at the front.
+        """
         markets = await self._store.get_active_markets()
+        # Sort newest-first so tickers[:max_subs] picks active markets
+        markets.sort(
+            key=lambda m: m.last_updated_at if m.last_updated_at else 0,
+            reverse=True,
+        )
+        self._ticker_to_market_id.clear()
         for m in markets:
             if m.id is not None:
                 self._ticker_to_market_id[m.external_id] = m.id
@@ -144,6 +160,8 @@ class IngestionManager(LoggerMixin):
                         count=len(new_tickers),
                         tickers=new_tickers[:10],
                     )
+                    # Signal streaming tasks to resubscribe with new tickers
+                    self._resubscribe_needed.set()
             except Exception as exc:
                 self.logger.error(
                     "Discovery cycle error",
@@ -154,6 +172,9 @@ class IngestionManager(LoggerMixin):
 
                     self._metrics.record_error(ErrorCategory.DISCOVERY_ERROR)
 
+            # Signal that at least one discovery cycle has completed
+            self._first_discovery_done.set()
+
             await asyncio.sleep(self._settings.discovery_interval_seconds)
 
     # ------------------------------------------------------------------
@@ -163,8 +184,13 @@ class IngestionManager(LoggerMixin):
     async def _streaming_task(self, adapter: BaseAdapter) -> None:
         """Run the WebSocket streaming loop for a specific adapter."""
         adapter_name = adapter.__class__.__name__
-        # Wait briefly for the first discovery cycle to populate tickers
-        await asyncio.sleep(2.0)
+
+        # Wait for the first discovery cycle to populate tickers
+        self.logger.info(
+            "Waiting for first discovery cycle before streaming",
+            adapter=adapter_name,
+        )
+        await self._first_discovery_done.wait()
 
         while self._running:
             tickers = list(self._ticker_to_market_id.keys())
@@ -180,6 +206,10 @@ class IngestionManager(LoggerMixin):
             max_subs = self._settings.ws_max_subscriptions
             subscribe_tickers = tickers[:max_subs]
             self._subscribed_tickers = set(subscribe_tickers)
+
+            # Clear the resubscribe flag before connecting so we only
+            # react to *new* discoveries that arrive after this point
+            self._resubscribe_needed.clear()
 
             self.logger.info(
                 "Starting WebSocket stream",
@@ -197,6 +227,14 @@ class IngestionManager(LoggerMixin):
                     resolved = self._resolve_event(event)
                     if resolved is not None:
                         await self._bus.put(resolved)
+
+                    # Check if discovery found new tickers that need subscription
+                    if self._resubscribe_needed.is_set():
+                        self.logger.info(
+                            "New tickers available — reconnecting to resubscribe",
+                            adapter=adapter_name,
+                        )
+                        break
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
