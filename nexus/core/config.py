@@ -181,6 +181,10 @@ class Settings(BaseSettings):
     anomaly_detection_interval_seconds: int = Field(
         default=300, description="Seconds between detection cycles"
     )
+    detection_startup_delay_seconds: int = Field(
+        default=120,
+        description="Seconds to wait before starting anomaly detection (allows events to accumulate)",
+    )
     anomaly_windows: str = Field(
         default="5,15,60,1440",
         description="Comma-separated window sizes in minutes",

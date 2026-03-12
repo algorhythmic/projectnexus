@@ -42,6 +42,9 @@ class SyncLayer(LoggerMixin):
     # One-shot sync methods
     # ------------------------------------------------------------------
 
+    # Max records per Convex mutation to stay under body size limits
+    SYNC_BATCH_SIZE = 500
+
     async def sync_markets(self) -> int:
         """Push current market state to Convex. Returns record count."""
         rows = await self._store.query_market_state()
@@ -65,9 +68,11 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        await self._convex.mutation(
-            "nexusSync:upsertMarkets", {"markets": records}
-        )
+        for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+            batch = records[i : i + self.SYNC_BATCH_SIZE]
+            await self._convex.mutation(
+                "nexusSync:upsertMarkets", {"markets": batch}
+            )
         self.logger.info("sync_markets", count=len(records))
         return len(records)
 
@@ -141,9 +146,11 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        await self._convex.mutation(
-            "nexusSync:upsertMarketSummaries", {"summaries": records}
-        )
+        for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+            batch = records[i : i + self.SYNC_BATCH_SIZE]
+            await self._convex.mutation(
+                "nexusSync:upsertMarketSummaries", {"summaries": batch}
+            )
         self.logger.info("sync_market_summaries", count=len(records))
         return len(records)
 

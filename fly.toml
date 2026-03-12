@@ -16,6 +16,7 @@ primary_region = 'iad'
 
 [env]
   CROSS_PLATFORM_ENABLED = 'true'
+  DETECTION_STARTUP_DELAY_SECONDS = '120'
   DISCOVERY_INTERVAL_SECONDS = '60'
   KALSHI_USE_DEMO = 'false'
   LOG_LEVEL = 'INFO'

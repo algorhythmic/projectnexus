@@ -172,8 +172,10 @@ def discover(
 @app.command()
 def run(
     platform: str = typer.Option("all", "--platform", help="Platform: kalshi, polymarket, or all"),
+    no_sync: bool = typer.Option(False, "--no-sync", help="Disable Convex sync"),
+    no_detect: bool = typer.Option(False, "--no-detect", help="Disable anomaly detection"),
 ) -> None:
-    """Start real-time ingestion (REST discovery + WebSocket streaming)."""
+    """Start the full Nexus pipeline (ingestion + detection + sync)."""
     from nexus.ingestion.bus import EventBus
     from nexus.ingestion.manager import IngestionManager
     from nexus.ingestion.metrics import MetricsCollector
@@ -201,6 +203,59 @@ def run(
             await store.close()
             return
 
+        # Build detection loop
+        detection_loop = None
+        if not no_detect:
+            from nexus.correlation.detection_loop import DetectionLoop
+
+            detection_loop = DetectionLoop(
+                store=store,
+                window_configs=settings.anomaly_window_configs,
+                interval_seconds=settings.anomaly_detection_interval_seconds,
+                baseline_hours=settings.anomaly_baseline_hours,
+                expiry_hours=settings.anomaly_expiry_hours,
+                cluster_min_markets=settings.cluster_anomaly_min_markets,
+                cluster_window_minutes=settings.cluster_anomaly_window_minutes,
+                cross_platform_enabled=settings.cross_platform_enabled,
+                cross_platform_window_minutes=settings.cross_platform_window_minutes,
+                retention_days=settings.retention_days,
+            )
+
+        # Optionally build sync layer
+        sync_layer = None
+        convex_client = None
+        if (
+            not no_sync
+            and settings.store_backend == "postgres"
+            and settings.convex_deployment_url
+            and settings.convex_deploy_key
+        ):
+            from nexus.sync import ConvexClient, SyncLayer
+
+            convex_client = ConvexClient(
+                deployment_url=settings.convex_deployment_url,
+                deploy_key=settings.convex_deploy_key,
+            )
+            sync_layer = SyncLayer(
+                store=store,
+                convex=convex_client,
+                market_interval=settings.sync_market_interval_seconds,
+                summary_interval=settings.sync_summary_interval_seconds,
+                topics_interval=settings.sync_topics_interval_seconds,
+            )
+
+        # Status summary
+        components = ["ingestion"]
+        if detection_loop:
+            components.append("detection")
+        if sync_layer:
+            components.append("sync")
+        console.print(
+            f"Starting Nexus ({', '.join(components)}). "
+            f"{len(adapters)} adapter(s), discovery every "
+            f"{settings.discovery_interval_seconds}s. Ctrl-c to stop."
+        )
+
         async with contextlib.AsyncExitStack() as stack:
             for a in adapters:
                 await stack.enter_async_context(a)
@@ -208,19 +263,38 @@ def run(
             manager = IngestionManager(
                 adapters, store, bus, settings, metrics=metrics
             )
-            console.print(
-                f"Starting ingestion ({len(adapters)} adapter(s), discovery every "
-                f"{settings.discovery_interval_seconds}s + WebSocket streaming, "
-                f"health reports every {settings.health_report_interval_seconds}s). "
-                f"Ctrl-c to stop."
-            )
+
             try:
-                await manager.run()
-            except asyncio.CancelledError:
-                pass
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(manager.run(), name="ingestion")
+                    if detection_loop:
+                        tg.create_task(
+                            _delayed_detection(
+                                detection_loop,
+                                settings.detection_startup_delay_seconds,
+                            ),
+                            name="detection",
+                        )
+                    if sync_layer:
+                        tg.create_task(
+                            sync_layer.run_forever(), name="sync"
+                        )
+            except* Exception as eg:
+                for exc in eg.exceptions:
+                    if not isinstance(exc, asyncio.CancelledError):
+                        console.print(
+                            f"[bold red]Task failed: "
+                            f"{type(exc).__name__}: {exc}[/bold red]"
+                        )
             finally:
                 await manager.stop()
+                if detection_loop:
+                    await detection_loop.stop()
+                if sync_layer:
+                    await sync_layer.stop()
 
+        if convex_client:
+            await convex_client.close()
         await bus.stop()
         snap = metrics.snapshot()
         console.print(
@@ -235,6 +309,20 @@ def run(
         asyncio.run(_run())
     except KeyboardInterrupt:
         console.print("\nShutdown requested.")
+
+
+async def _delayed_detection(loop: "DetectionLoop", delay_seconds: int) -> None:  # noqa: F821
+    """Run detection loop after a startup delay to let events accumulate."""
+    import structlog
+
+    logger = structlog.get_logger()
+    logger.info(
+        "Detection waiting for startup delay",
+        delay_seconds=delay_seconds,
+    )
+    await asyncio.sleep(delay_seconds)
+    logger.info("Detection starting")
+    await loop.run_forever()
 
 
 @app.command()
