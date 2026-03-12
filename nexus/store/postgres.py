@@ -238,37 +238,51 @@ class PostgresStore(BaseStore, LoggerMixin):
     # ------------------------------------------------------------------
 
     async def upsert_markets(self, markets: List[DiscoveredMarket]) -> int:
-        """Insert or update markets. Returns count of newly inserted."""
+        """Insert or update markets. Returns count of newly inserted.
+
+        Uses unnest-based batch INSERT for performance over remote
+        connections (single round-trip per batch instead of N).
+        """
         now_ms = int(time.time() * 1000)
         new_count = 0
+        batch_size = 500
+
+        sql = """
+            INSERT INTO markets
+                (platform, external_id, title, description, category,
+                 is_active, first_seen_at, last_updated_at)
+            SELECT * FROM unnest(
+                $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+                $6::bool[], $7::bigint[], $8::bigint[]
+            )
+            ON CONFLICT (platform, external_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                description = EXCLUDED.description,
+                category = EXCLUDED.category,
+                is_active = EXCLUDED.is_active,
+                last_updated_at = EXCLUDED.last_updated_at
+            RETURNING
+                CASE WHEN xmax = 0 THEN 1 ELSE 0 END
+        """
 
         async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                for m in markets:
-                    result = await conn.fetchval(
-                        """INSERT INTO markets
-                           (platform, external_id, title, description, category,
-                            is_active, first_seen_at, last_updated_at)
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                           ON CONFLICT (platform, external_id) DO UPDATE SET
-                               title = EXCLUDED.title,
-                               description = EXCLUDED.description,
-                               category = EXCLUDED.category,
-                               is_active = EXCLUDED.is_active,
-                               last_updated_at = EXCLUDED.last_updated_at
-                           RETURNING
-                               CASE WHEN xmax = 0 THEN 1 ELSE 0 END""",
-                        m.platform.value,
-                        m.external_id,
-                        m.title,
-                        m.description,
-                        m.category,
-                        m.is_active,
-                        now_ms,
-                        now_ms,
-                    )
-                    if result == 1:
-                        new_count += 1
+            for i in range(0, len(markets), batch_size):
+                batch = markets[i : i + batch_size]
+                platforms = [m.platform.value for m in batch]
+                external_ids = [m.external_id for m in batch]
+                titles = [m.title for m in batch]
+                descriptions = [m.description for m in batch]
+                categories = [m.category for m in batch]
+                actives = [m.is_active for m in batch]
+                first_seen = [now_ms] * len(batch)
+                last_updated = [now_ms] * len(batch)
+
+                rows = await conn.fetch(
+                    sql,
+                    platforms, external_ids, titles, descriptions,
+                    categories, actives, first_seen, last_updated,
+                )
+                new_count += sum(1 for r in rows if r[0] == 1)
 
         return new_count
 

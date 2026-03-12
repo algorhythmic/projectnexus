@@ -14,9 +14,6 @@ from nexus.core.config import settings
 
 def configure_logging() -> None:
     """Configure structured logging for the application."""
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -48,7 +45,13 @@ def configure_logging() -> None:
             )
         )
     else:
-        root.addHandler(logging.FileHandler(logs_dir / "nexus.log"))
+        # Try file logging, fall back to stdout-only (e.g. in containers)
+        try:
+            logs_dir = Path("logs")
+            logs_dir.mkdir(exist_ok=True)
+            root.addHandler(logging.FileHandler(logs_dir / "nexus.log"))
+        except PermissionError:
+            pass
         root.addHandler(logging.StreamHandler(sys.stdout))
 
 

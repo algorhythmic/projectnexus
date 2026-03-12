@@ -1,31 +1,32 @@
-# Fly.io configuration for Nexus
-# Deploy: fly launch --no-deploy && fly secrets set ... && fly deploy
+# fly.toml app configuration file generated for projectnexus on 2026-03-11T15:27:13-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "projectnexus"
-primary_region = "iad"
+app = 'projectnexus'
+primary_region = 'iad'
 
 [build]
-  dockerfile = "Dockerfile"
-  build-target = "production"
+  dockerfile = 'Dockerfile'
+  build-target = 'production'
 
-# Nexus is a worker process, not a web server.
-# No HTTP services, no health check endpoints.
-[processes]
-  worker = "nexus run --platform all"
+# Secrets (not here — use fly secrets set):
+#   POSTGRES_DSN="postgresql://...?sslmode=require"  (always require SSL for Supabase)
+#   KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PEM, CONVEX_DEPLOY_KEY, ANTHROPIC_API_KEY
 
-# Machine sizing — start small, scale as needed
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
-  processes = ["worker"]
-
-# Environment variables (non-secret)
-# Secrets are set via: fly secrets set POSTGRES_DSN=... CONVEX_DEPLOY_KEY=... etc.
 [env]
-  STORE_BACKEND = "postgres"
-  KALSHI_USE_DEMO = "true"
-  POLYMARKET_ENABLED = "false"
-  LOG_LEVEL = "INFO"
-  DISCOVERY_INTERVAL_SECONDS = "60"
-  CROSS_PLATFORM_ENABLED = "true"
-  RETENTION_DAYS = "90"
+  CROSS_PLATFORM_ENABLED = 'true'
+  DISCOVERY_INTERVAL_SECONDS = '60'
+  KALSHI_USE_DEMO = 'false'
+  LOG_LEVEL = 'INFO'
+  POLYMARKET_ENABLED = 'false'
+  RETENTION_DAYS = '90'
+  STORE_BACKEND = 'postgres'
+
+[processes]
+  worker = 'python -m nexus.cli run --platform all'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1024mb'
+  processes = ['worker']

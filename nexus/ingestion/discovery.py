@@ -61,9 +61,18 @@ class DiscoveryLoop(LoggerMixin):
             try:
                 discovered = await adapter.discover()
                 new_count = await self.store.upsert_markets(discovered)
-                events = await self._generate_events(discovered)
-                if events:
-                    await self.store.insert_events(events)
+                # Skip event generation on first cycle (empty cache)
+                # to avoid N+1 queries for thousands of new markets
+                events: List[EventRecord] = []
+                if self._price_cache:
+                    events = await self._generate_events(discovered)
+                    if events:
+                        await self.store.insert_events(events)
+                else:
+                    # Seed the price cache without generating events
+                    for m in discovered:
+                        cache_key = (m.platform.value, m.external_id)
+                        self._price_cache[cache_key] = m.yes_price
                 results[name] = new_count
                 self.logger.info(
                     "Discovery cycle complete",

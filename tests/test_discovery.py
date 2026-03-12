@@ -75,9 +75,9 @@ class TestDiscoveryLoop:
         await loop.run_once()
 
         events = await tmp_store.get_events()
-        # Should have at least a new_market and a price_change
+        # First cycle seeds the price cache (no events generated).
+        # Second cycle detects the price change.
         event_types = {e.event_type.value for e in events}
-        assert "new_market" in event_types
         assert "price_change" in event_types
 
     async def test_adapter_error_is_handled(self, tmp_store):

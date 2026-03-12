@@ -151,11 +151,18 @@ class BaseAdapter(LoggerMixin, ABC):
 
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
+                extra: Dict[str, Any] = {}
+                if status in (401, 403):
+                    try:
+                        extra["response_body"] = exc.response.text[:500]
+                    except Exception:
+                        pass
                 self.logger.warning(
                     "HTTP error",
                     status=status,
                     url=url,
                     attempt=attempt + 1,
+                    **extra,
                 )
                 # Don't retry client errors (except 429)
                 if 400 <= status < 500 and status != 429:

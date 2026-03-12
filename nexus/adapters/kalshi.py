@@ -109,6 +109,10 @@ class KalshiAdapter(BaseAdapter):
         self._key_path = settings.kalshi_private_key_path
         self._key_pem = settings.kalshi_private_key_pem
 
+        # Extract URL path prefix for auth signing (e.g. "/trade-api/v2")
+        from urllib.parse import urlparse
+        self._url_path_prefix = urlparse(base_url).path.rstrip("/")
+
         # Load key from PEM string (containerized) or file path
         key_source = None
         if self._key_pem:
@@ -137,11 +141,13 @@ class KalshiAdapter(BaseAdapter):
             "Content-Type": "application/json",
         }
         if self._private_key and self._api_key:
+            # Kalshi signs the full path (e.g. /trade-api/v2/markets)
+            sign_path = f"{self._url_path_prefix}{path}"
             auth = generate_auth_headers(
                 api_key=self._api_key,
                 private_key=self._private_key,
                 method=method,
-                path=path,
+                path=sign_path,
             )
             headers.update(auth)
         return headers
@@ -154,6 +160,8 @@ class KalshiAdapter(BaseAdapter):
         """Enumerate all active markets via cursor-paginated REST calls."""
         all_markets: List[DiscoveredMarket] = []
         cursor: Optional[str] = None
+        max_pages = self._settings.kalshi_discovery_max_pages
+        page = 0
 
         while True:
             params: Dict[str, Any] = {"limit": 200, "status": "open"}
@@ -165,6 +173,7 @@ class KalshiAdapter(BaseAdapter):
             raw_markets = data.get("markets", [])
             if not raw_markets:
                 break
+            page += 1
 
             for raw in raw_markets:
                 market = self._normalize(raw)
@@ -173,6 +182,13 @@ class KalshiAdapter(BaseAdapter):
 
             cursor = data.get("cursor")
             if not cursor:
+                break
+            if max_pages and page >= max_pages:
+                self.logger.info(
+                    "Kalshi discovery page limit reached",
+                    pages=page,
+                    markets_so_far=len(all_markets),
+                )
                 break
 
         self.logger.info(

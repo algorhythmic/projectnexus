@@ -35,11 +35,11 @@ class Settings(BaseSettings):
         description="RSA private key PEM content (alternative to file path, for containerized deployments)",
     )
     kalshi_base_url: str = Field(
-        default="https://trading-api.kalshi.com/trade-api/v2",
+        default="https://api.elections.kalshi.com/trade-api/v2",
         description="Kalshi production API base URL",
     )
     kalshi_demo_base_url: str = Field(
-        default="https://demo-api.kalshi.com/trade-api/v2",
+        default="https://demo-api.kalshi.co/trade-api/v2",
         description="Kalshi demo/sandbox API base URL",
     )
     kalshi_use_demo: bool = Field(
@@ -77,6 +77,11 @@ class Settings(BaseSettings):
         default=30, description="Request timeout in seconds"
     )
 
+    kalshi_discovery_max_pages: int = Field(
+        default=10,
+        description="Max pages to fetch during Kalshi discovery (0 = unlimited, 200 markets/page)",
+    )
+
     # Rate Limiting
     kalshi_reads_per_second: float = Field(
         default=15.0,
@@ -85,11 +90,11 @@ class Settings(BaseSettings):
 
     # WebSocket
     kalshi_ws_url: str = Field(
-        default="wss://trading-api.kalshi.com/trade-api/ws/v2",
+        default="wss://api.elections.kalshi.com/trade-api/ws/v2",
         description="Kalshi production WebSocket URL",
     )
     kalshi_demo_ws_url: str = Field(
-        default="wss://demo-api.kalshi.com/trade-api/ws/v2",
+        default="wss://demo-api.kalshi.co/trade-api/ws/v2",
         description="Kalshi demo WebSocket URL",
     )
     ws_reconnect_delay: float = Field(
@@ -276,6 +281,24 @@ class Settings(BaseSettings):
         if self.kalshi_use_demo:
             return self.kalshi_demo_ws_url
         return self.kalshi_ws_url
+
+    _SECRET_FIELDS = frozenset({
+        "kalshi_api_key", "kalshi_private_key_pem", "kalshi_private_key_path",
+        "postgres_dsn", "convex_deploy_key", "anthropic_api_key",
+    })
+
+    def __repr__(self) -> str:
+        """Redact secrets from repr to prevent leaking in tracebacks/logs."""
+        fields = []
+        for name in self.model_fields:
+            value = getattr(self, name)
+            if name in self._SECRET_FIELDS and value:
+                fields.append(f"{name}='***'")
+            else:
+                fields.append(f"{name}={value!r}")
+        return f"Settings({', '.join(fields)})"
+
+    __str__ = __repr__
 
 
 # Global settings instance

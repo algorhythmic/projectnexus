@@ -94,12 +94,12 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 ## Key API Details
 
 ### Kalshi
-- **Production:** `https://trading-api.kalshi.com/trade-api/v2`
-- **Demo/Sandbox:** `https://demo-api.kalshi.com/trade-api/v2` (default, safe for development)
+- **Production:** `https://api.elections.kalshi.com/trade-api/v2`
+- **Demo/Sandbox:** `https://demo-api.kalshi.co/trade-api/v2` (default, safe for development)
 - **Auth:** RSA-PSS SHA-256 — message is `timestamp_ms + METHOD + path`, three headers: `KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-TIMESTAMP`, `KALSHI-ACCESS-SIGNATURE`
 - **Rate limits (Basic tier):** 20 reads/sec, 10 writes/sec — we default to 15 reads/sec for safety
 - **Pagination:** Cursor-based (`cursor` param in response), not page-number based
-- **WebSocket:** `wss://trading-api.kalshi.com/trade-api/ws/v2`
+- **WebSocket:** `wss://api.elections.kalshi.com/trade-api/ws/v2`
 - **~3,500 markets**, defined trading hours
 
 ### Polymarket
@@ -141,9 +141,8 @@ Nexus and MarketFinder are **separate systems** connected only by a sync layer (
 - **GitHub repo:** `algorhythmic/projectnexus`
 - **Supabase:** PostgreSQL host (use direct connection port 5432, NOT PgBouncer 6543)
 - **Fly.io:** Deployment config ready (`Dockerfile` + `fly.toml`), not yet deployed
-- **Convex deployment:** `sensible-parakeet-564` (MarketFinder webapp) — manually deployed, no CI/CD
-- **Convex schema drift:** Both `marketfinder-main/` and `marketfinder_ETL-main/` have `convex/` directories with identical schemas and cron definitions. The ETL repo was likely deployed to the same `sensible-parakeet-564` deployment via `npx convex dev` from a different dev environment, overwriting the main repo's functions. Local `marketfinder-main/` code then continued evolving without redeploying, causing 55 TS errors across 7 files. The deployed crons (Polymarket sync/30m, Kalshi sync/40m, arbitrage detection/5m) kept running, accumulating 461.9MB in `priceHistory`.
-- **Convex resolution:** Before Milestone 4.2, either pause the deployment to stop storage bleed, or deploy current `marketfinder-main/` code to fix drift. Nexus is the source of truth going forward — Convex becomes a read-only sync target.
+- **Convex (new):** `deafening-starling-749` — fresh dev cloud deployment for Nexus sync. Cloud URL: `https://deafening-starling-749.convex.cloud`. Deploy key set via `fly secrets set CONVEX_DEPLOY_KEY=...`.
+- **Convex (legacy):** `sensible-parakeet-564` — old MarketFinder deployment, schema drift from ETL repo overwriting via `npx convex dev`. Crons accumulated 461.9MB in `priceHistory`. Should be paused or deleted — no longer used by Nexus.
 - **Containerized auth:** Inline PEM key support via `KALSHI_PRIVATE_KEY_PEM` env var (for Fly.io deployment where key file isn't available)
 
 ## Environment Notes

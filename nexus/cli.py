@@ -132,7 +132,7 @@ def db_stats() -> None:
 
 @app.command()
 def discover(
-    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+    platform: str = typer.Option("all", "--platform", help="Platform: kalshi, polymarket, or all"),
 ) -> None:
     """Run a single discovery cycle (one-shot, no loop)."""
     from nexus.ingestion.discovery import DiscoveryLoop
@@ -171,7 +171,7 @@ def discover(
 
 @app.command()
 def run(
-    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+    platform: str = typer.Option("all", "--platform", help="Platform: kalshi, polymarket, or all"),
 ) -> None:
     """Start real-time ingestion (REST discovery + WebSocket streaming)."""
     from nexus.ingestion.bus import EventBus
@@ -239,7 +239,7 @@ def run(
 
 @app.command()
 def poll(
-    platform: str = typer.Option("all", help="Platform: kalshi, polymarket, or all"),
+    platform: str = typer.Option("all", "--platform", help="Platform: kalshi, polymarket, or all"),
 ) -> None:
     """Start discovery-only polling loop (no WebSocket)."""
     from nexus.ingestion.discovery import DiscoveryLoop
@@ -286,7 +286,7 @@ def poll(
 
 @app.command()
 def stream(
-    platform: str = typer.Option("kalshi", help="Platform: kalshi or polymarket"),
+    platform: str = typer.Option("kalshi", "--platform", help="Platform: kalshi or polymarket"),
 ) -> None:
     """Stream WebSocket events to console (debug tool, no storage)."""
     from nexus.store import create_store
