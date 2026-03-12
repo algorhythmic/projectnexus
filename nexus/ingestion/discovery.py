@@ -31,10 +31,12 @@ class DiscoveryLoop(LoggerMixin):
         adapters: List[BaseAdapter],
         store: BaseStore,
         interval_seconds: int = 60,
+        staleness_hours: int = 6,
     ) -> None:
         self.adapters = adapters
         self.store = store
         self.interval = interval_seconds
+        self._staleness_ms = staleness_hours * 3600 * 1000
         self._running = False
         # In-memory price cache: (platform, external_id) -> last known yes_price
         self._price_cache: Dict[Tuple[str, str], Optional[float]] = {}
@@ -61,6 +63,21 @@ class DiscoveryLoop(LoggerMixin):
             try:
                 discovered = await adapter.discover()
                 new_count = await self.store.upsert_markets(discovered)
+
+                # Deactivate markets not updated within the staleness window
+                now_ms = int(time.time() * 1000)
+                platform = (
+                    discovered[0].platform.value if discovered else None
+                )
+                deactivated = 0
+                if platform and self._staleness_ms > 0:
+                    cutoff_ms = now_ms - self._staleness_ms
+                    deactivated = (
+                        await self.store.deactivate_stale_markets(
+                            platform, cutoff_ms
+                        )
+                    )
+
                 # Skip event generation on first cycle (empty cache)
                 # to avoid N+1 queries for thousands of new markets
                 events: List[EventRecord] = []
@@ -79,6 +96,7 @@ class DiscoveryLoop(LoggerMixin):
                     adapter=name,
                     discovered=len(discovered),
                     new=new_count,
+                    deactivated=deactivated,
                     events_emitted=len(events),
                 )
             except Exception as exc:

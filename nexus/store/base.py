@@ -46,6 +46,15 @@ class BaseStore(ABC):
         ...
 
     @abstractmethod
+    async def deactivate_stale_markets(
+        self, platform: str, before_ms: int
+    ) -> int:
+        """Set is_active=FALSE for markets of the given platform whose
+        last_updated_at is older than before_ms. Returns count of
+        deactivated markets."""
+        ...
+
+    @abstractmethod
     async def insert_events(self, events: List[EventRecord]) -> int:
         """Batch-insert events. Returns the number of rows inserted."""
         ...

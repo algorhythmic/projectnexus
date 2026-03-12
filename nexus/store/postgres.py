@@ -297,6 +297,21 @@ class PostgresStore(BaseStore, LoggerMixin):
             )
         return self._row_to_market(row) if row else None
 
+    async def deactivate_stale_markets(
+        self, platform: str, before_ms: int
+    ) -> int:
+        sql = """
+            UPDATE markets
+            SET is_active = FALSE
+            WHERE platform = $1
+              AND is_active = TRUE
+              AND last_updated_at < $2
+        """
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(sql, platform, before_ms)
+        # asyncpg returns e.g. "UPDATE 1234"
+        return int(result.split()[-1])
+
     async def get_active_markets(
         self, platform: Optional[str] = None
     ) -> List[MarketRecord]:

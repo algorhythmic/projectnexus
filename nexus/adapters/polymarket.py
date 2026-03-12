@@ -202,7 +202,6 @@ class PolymarketAdapter(BaseAdapter):
             no_price=no_price,
             volume=float(volume),
             end_date=end_date_str,
-            raw_data=raw,
         )
 
     def _build_token_mapping(self, raw: Dict[str, Any]) -> None:

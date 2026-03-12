@@ -78,8 +78,12 @@ class Settings(BaseSettings):
     )
 
     kalshi_discovery_max_pages: int = Field(
-        default=10,
+        default=30,
         description="Max pages to fetch during Kalshi discovery (0 = unlimited, 200 markets/page)",
+    )
+    discovery_staleness_hours: int = Field(
+        default=6,
+        description="Deactivate markets not seen in discovery for this many hours",
     )
 
     # Rate Limiting

@@ -484,5 +484,4 @@ class KalshiAdapter(BaseAdapter):
             no_price=no_price,
             volume=float(volume),
             end_date=close_time,
-            raw_data=raw,
         )

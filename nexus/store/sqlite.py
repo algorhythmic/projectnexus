@@ -156,6 +156,18 @@ class SQLiteStore(BaseStore, LoggerMixin):
     # Markets
     # ------------------------------------------------------------------
 
+    async def deactivate_stale_markets(
+        self, platform: str, before_ms: int
+    ) -> int:
+        cursor = await self.db.execute(
+            """UPDATE markets
+               SET is_active = 0
+               WHERE platform = ? AND is_active = 1 AND last_updated_at < ?""",
+            (platform, before_ms),
+        )
+        await self.db.commit()
+        return cursor.rowcount
+
     async def upsert_markets(self, markets: List[DiscoveredMarket]) -> int:
         """Insert or update markets. Returns count of newly inserted."""
         now_ms = int(time.time() * 1000)

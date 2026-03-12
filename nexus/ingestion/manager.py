@@ -147,6 +147,7 @@ class IngestionManager(LoggerMixin):
             adapters=self._adapters,
             store=self._store,
             interval_seconds=self._settings.discovery_interval_seconds,
+            staleness_hours=self._settings.discovery_staleness_hours,
         )
 
         while self._running:
