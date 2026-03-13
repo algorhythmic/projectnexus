@@ -254,6 +254,17 @@ class BaseStore(ABC):
         ...
 
     # ------------------------------------------------------------------
+    # Targeted queries
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def get_markets_with_recent_events(
+        self, since_ms: int
+    ) -> List[int]:
+        """Get IDs of markets that have events with timestamp >= since_ms."""
+        ...
+
+    # ------------------------------------------------------------------
     # Data retention (Milestone 3.3)
     # ------------------------------------------------------------------
 

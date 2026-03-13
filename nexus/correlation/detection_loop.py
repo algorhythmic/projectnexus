@@ -41,6 +41,7 @@ class DetectionLoop(LoggerMixin):
         self._retention_days = retention_days
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._last_cycle_ts: int = 0
 
     async def run_once(self) -> int:
         """Run a single detection cycle. Returns anomaly count."""
@@ -52,12 +53,14 @@ class DetectionLoop(LoggerMixin):
         if expired > 0:
             self.logger.info("expired_anomalies", count=expired)
 
-        # Get all active markets
-        markets = await self._store.get_active_markets()
-        market_ids = [m.id for m in markets if m.id is not None]
+        # Only scan markets that had events since last cycle
+        market_ids = await self._store.get_markets_with_recent_events(
+            self._last_cycle_ts
+        )
+        self._last_cycle_ts = now_ms
 
         if not market_ids:
-            self.logger.info("detection_skip", reason="no active markets")
+            self.logger.info("detection_skip", reason="no markets with recent events")
             return 0
 
         wc = WindowComputer(self._store)

@@ -685,6 +685,20 @@ class SQLiteStore(BaseStore, LoggerMixin):
         return self._row_to_cross_platform_link(row) if row else None
 
     # ------------------------------------------------------------------
+    # Targeted queries
+    # ------------------------------------------------------------------
+
+    async def get_markets_with_recent_events(
+        self, since_ms: int
+    ) -> List[int]:
+        cursor = await self.db.execute(
+            "SELECT DISTINCT market_id FROM events WHERE timestamp >= ?",
+            (since_ms,),
+        )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
+    # ------------------------------------------------------------------
     # Data retention (Milestone 3.3)
     # ------------------------------------------------------------------
 

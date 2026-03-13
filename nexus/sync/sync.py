@@ -193,19 +193,24 @@ class SyncLayer(LoggerMixin):
             try:
                 # Markets + anomalies (highest frequency)
                 if now - last_market >= self._market_interval:
-                    if hasattr(self._store, "refresh_views"):
-                        await self._store.refresh_views()
+                    if hasattr(self._store, "refresh_view"):
+                        await self._store.refresh_view("v_current_market_state")
+                        await self._store.refresh_view("v_active_anomalies")
                     await self.sync_markets()
                     await self.sync_anomalies()
                     last_market = now
 
                 # Market summaries
                 if now - last_summary >= self._summary_interval:
+                    if hasattr(self._store, "refresh_view"):
+                        await self._store.refresh_view("v_market_summaries")
                     await self.sync_market_summaries()
                     last_summary = now
 
                 # Trending topics
                 if now - last_topics >= self._topics_interval:
+                    if hasattr(self._store, "refresh_view"):
+                        await self._store.refresh_view("v_trending_topics")
                     await self.sync_trending_topics()
                     last_topics = now
 

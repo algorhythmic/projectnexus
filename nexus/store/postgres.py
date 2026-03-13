@@ -114,6 +114,13 @@ CREATE INDEX IF NOT EXISTS idx_cross_platform_links_b ON cross_platform_links(ma
 """
 
 # Materialized views for common read patterns
+_MATERIALIZED_VIEWS = frozenset({
+    "v_current_market_state",
+    "v_active_anomalies",
+    "v_trending_topics",
+    "v_market_summaries",
+})
+
 _VIEWS_SQL = """
 CREATE MATERIALIZED VIEW IF NOT EXISTS v_current_market_state AS
 SELECT
@@ -820,6 +827,20 @@ class PostgresStore(BaseStore, LoggerMixin):
         return self._row_to_cross_platform_link(row) if row else None
 
     # ------------------------------------------------------------------
+    # Targeted queries
+    # ------------------------------------------------------------------
+
+    async def get_markets_with_recent_events(
+        self, since_ms: int
+    ) -> List[int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT market_id FROM events WHERE timestamp >= $1",
+                since_ms,
+            )
+        return [row[0] for row in rows]
+
+    # ------------------------------------------------------------------
     # Data retention (Milestone 3.3)
     # ------------------------------------------------------------------
 
@@ -863,20 +884,23 @@ class PostgresStore(BaseStore, LoggerMixin):
     # Materialized view management
     # ------------------------------------------------------------------
 
+    async def refresh_view(
+        self, view_name: str, concurrently: bool = True
+    ) -> None:
+        """Refresh a single materialized view."""
+        if view_name not in _MATERIALIZED_VIEWS:
+            raise ValueError(f"Unknown materialized view: {view_name}")
+        modifier = "CONCURRENTLY" if concurrently else ""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"REFRESH MATERIALIZED VIEW {modifier} {view_name}"
+            )
+        self.logger.debug("view_refreshed", view=view_name)
+
     async def refresh_views(self, concurrently: bool = True) -> None:
         """Refresh all materialized views."""
-        modifier = "CONCURRENTLY" if concurrently else ""
-        views = [
-            "v_current_market_state",
-            "v_active_anomalies",
-            "v_trending_topics",
-            "v_market_summaries",
-        ]
-        async with self.pool.acquire() as conn:
-            for view in views:
-                await conn.execute(
-                    f"REFRESH MATERIALIZED VIEW {modifier} {view}"
-                )
+        for view in _MATERIALIZED_VIEWS:
+            await self.refresh_view(view, concurrently=concurrently)
         self.logger.info("Materialized views refreshed", concurrently=concurrently)
 
     # ------------------------------------------------------------------

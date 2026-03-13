@@ -122,26 +122,37 @@ class DiscoveryLoop(LoggerMixin):
     ) -> List[EventRecord]:
         """Compare discovered markets to stored state and emit events."""
         events: List[EventRecord] = []
+        if not markets:
+            return events
+
         now_ms = int(time.time() * 1000)
 
+        # Batch-load all stored markets for this platform (single query
+        # instead of N individual lookups)
+        platform = markets[0].platform.value
+        stored_markets = await self.store.get_active_markets(platform=platform)
+        stored_lookup: Dict[Tuple[str, str], int] = {
+            (m.platform.value, m.external_id): m.id
+            for m in stored_markets
+            if m.id is not None
+        }
+
         for m in markets:
-            stored = await self.store.get_market_by_external_id(
-                m.platform.value, m.external_id
-            )
-            if stored is None or stored.id is None:
+            market_key = (m.platform.value, m.external_id)
+            market_id = stored_lookup.get(market_key)
+            if market_id is None:
                 # Market not yet in store -- skip event generation;
                 # it will be created by the upsert and picked up next cycle.
                 continue
 
-            cache_key = (m.platform.value, m.external_id)
-            old_price = self._price_cache.get(cache_key)
+            old_price = self._price_cache.get(market_key)
 
             if old_price is None:
                 # First time seeing this market in this session — treat as new
                 if m.yes_price is not None:
                     events.append(
                         EventRecord(
-                            market_id=stored.id,
+                            market_id=market_id,
                             event_type=EventType.NEW_MARKET,
                             old_value=None,
                             new_value=m.yes_price,
@@ -154,7 +165,7 @@ class DiscoveryLoop(LoggerMixin):
             elif m.yes_price is not None and m.yes_price != old_price:
                 events.append(
                     EventRecord(
-                        market_id=stored.id,
+                        market_id=market_id,
                         event_type=EventType.PRICE_CHANGE,
                         old_value=old_price,
                         new_value=m.yes_price,
@@ -164,6 +175,6 @@ class DiscoveryLoop(LoggerMixin):
                 )
 
             # Update the cache
-            self._price_cache[cache_key] = m.yes_price
+            self._price_cache[market_key] = m.yes_price
 
         return events
