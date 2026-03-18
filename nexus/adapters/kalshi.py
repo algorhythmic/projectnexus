@@ -46,19 +46,27 @@ _CATEGORY_MAP: Dict[str, str] = {
 def _categorize_from_title(title: str) -> str:
     """Categorize a market based on title keywords."""
     t = title.lower()
-    if any(w in t for w in ("election", "president", "congress", "senate", "vote", "poll")):
+    if any(w in t for w in ("election", "president", "congress", "senate", "vote", "poll",
+                             "trump", "biden", "governor", "mayor", "democrat", "republican")):
         return "Politics"
-    if any(w in t for w in ("bitcoin", "crypto", "ethereum", "btc", "eth")):
+    if any(w in t for w in ("bitcoin", "crypto", "ethereum", "btc", "eth", "solana")):
         return "Cryptocurrency"
-    if any(w in t for w in ("gdp", "inflation", "fed", "economy", "unemployment", "interest rate")):
+    if any(w in t for w in ("gdp", "inflation", "fed", "economy", "unemployment", "interest rate",
+                             "cpi", "jobs report", "payroll", "treasury")):
         return "Economics"
-    if any(w in t for w in ("nfl", "nba", "mlb", "nhl", "super bowl", "world cup")):
+    if any(w in t for w in ("nfl", "nba", "mlb", "nhl", "super bowl", "world cup",
+                             "wins by", "points scored", "championship", "playoff",
+                             "arsenal", "liverpool", "lakers", "celtics", "march madness",
+                             "ncaa", "pga", "ufc", "boxing", "tennis", "soccer",
+                             "assists", "rebounds", "touchdowns", "goals",
+                             "over ", "under ", "spread", "moneyline")):
         return "Sports"
-    if any(w in t for w in ("temperature", "weather", "hurricane", "rain")):
+    if any(w in t for w in ("temperature", "weather", "hurricane", "rain", "tornado",
+                             "snowfall", "climate")):
         return "Weather"
-    if any(w in t for w in ("movie", "oscar", "emmy", "celebrity")):
+    if any(w in t for w in ("movie", "oscar", "emmy", "celebrity", "grammy", "netflix")):
         return "Entertainment"
-    if any(w in t for w in ("stock", "company", "ipo", "earnings")):
+    if any(w in t for w in ("stock", "company", "ipo", "earnings", "s&p", "nasdaq", "dow")):
         return "Business"
     return "Other"
 
@@ -470,7 +478,13 @@ class KalshiAdapter(BaseAdapter):
         no_price = (1.0 - yes_price) if yes_price is not None else None
 
         volume = raw.get("volume") or raw.get("open_interest") or 0
-        category = _standardize_category(raw.get("category"), title)
+        raw_category = (
+            raw.get("category")
+            or raw.get("event_category")
+            or raw.get("series_category")
+            or ""
+        )
+        category = _standardize_category(raw_category, title)
         description = raw.get("subtitle") or raw.get("description") or ""
 
         return DiscoveredMarket(

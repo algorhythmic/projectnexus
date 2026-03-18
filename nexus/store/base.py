@@ -39,6 +39,13 @@ class BaseStore(ABC):
         ...
 
     @abstractmethod
+    async def get_market_by_id(
+        self, market_id: int
+    ) -> Optional[MarketRecord]:
+        """Look up a single market by its internal database ID."""
+        ...
+
+    @abstractmethod
     async def get_active_markets(
         self, platform: Optional[str] = None
     ) -> List[MarketRecord]:

@@ -304,6 +304,13 @@ class PostgresStore(BaseStore, LoggerMixin):
             )
         return self._row_to_market(row) if row else None
 
+    async def get_market_by_id(self, market_id: int) -> Optional[MarketRecord]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM markets WHERE id = $1", market_id
+            )
+        return self._row_to_market(row) if row else None
+
     async def deactivate_stale_markets(
         self, platform: str, before_ms: int
     ) -> int:

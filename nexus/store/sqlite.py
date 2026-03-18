@@ -228,6 +228,13 @@ class SQLiteStore(BaseStore, LoggerMixin):
         row = await cursor.fetchone()
         return self._row_to_market(row) if row else None
 
+    async def get_market_by_id(self, market_id: int) -> Optional[MarketRecord]:
+        cursor = await self.db.execute(
+            "SELECT * FROM markets WHERE id = ?", (market_id,)
+        )
+        row = await cursor.fetchone()
+        return self._row_to_market(row) if row else None
+
     async def get_active_markets(
         self, platform: Optional[str] = None
     ) -> List[MarketRecord]:

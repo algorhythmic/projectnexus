@@ -1,8 +1,9 @@
 """Anomaly detection engine for single-market anomalies."""
 
+import math
 import re
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import (
@@ -27,6 +28,7 @@ class AnomalyDetector(LoggerMixin):
         self._store = store
         self._wc = window_computer
         self._baseline_hours = baseline_hours
+        self._title_cache: Dict[int, str] = {}
 
     async def detect_market(
         self,
@@ -46,11 +48,13 @@ class AnomalyDetector(LoggerMixin):
                 continue
 
             # Rule 1: Price change threshold
+            # Use logarithmic scaling so 2x threshold ≈ 0.5, 10x ≈ 0.8, 100x ≈ 1.0
             price_score = 0.0
             if stats.price_change_pct is not None:
                 abs_change = abs(stats.price_change_pct)
                 if abs_change > wc.price_change_threshold:
-                    price_score = min(1.0, abs_change / wc.price_change_threshold)
+                    ratio = abs_change / wc.price_change_threshold
+                    price_score = min(1.0, math.log10(ratio + 1) / math.log10(101))
 
             # Rule 2: Volume spike
             volume_score = 0.0
@@ -79,15 +83,21 @@ class AnomalyDetector(LoggerMixin):
             severity = max(price_score, volume_score, zscore_score)
 
             if severity > 0:
+                # Look up market title for human-readable summary
+                title = await self._get_market_title(market_id)
+
                 parts = []
                 if price_score > 0 and stats.price_change_pct is not None:
-                    parts.append(f"{stats.price_change_pct:+.1%} price")
+                    price_desc = f"{stats.price_change_pct:+.1%}"
+                    if stats.price_start is not None and stats.price_end is not None:
+                        price_desc += f" ({stats.price_start:.0%}→{stats.price_end:.0%})"
+                    parts.append(price_desc)
                 if volume_score > 0:
                     parts.append(f"{stats.volume_total:.0f} vol")
                 if zscore_score > 0:
                     parts.append("z-score breach")
                 trigger_desc = ", ".join(parts)
-                summary = f"market_id={market_id}: {trigger_desc} in {wc.window_minutes}min window"
+                summary = f"{title}: {trigger_desc} in {wc.window_minutes}min window"
 
                 anomaly = AnomalyRecord(
                     anomaly_type=AnomalyType.SINGLE_MARKET,
@@ -122,10 +132,35 @@ class AnomalyDetector(LoggerMixin):
         window_configs: List[WindowConfig],
         now_ms: int,
     ) -> int:
-        """Detect anomalies and store them. Returns count of anomalies stored."""
+        """Detect anomalies and store them. Returns count of anomalies stored.
+
+        Deduplicates: only stores the highest-severity anomaly per market
+        (across all windows) to avoid flooding with repeated alerts.
+        """
+        from nexus.core.types import AnomalyStatus
+
+        # Check which markets already have active anomalies — skip those
+        existing = await self._store.get_anomalies(
+            status=AnomalyStatus.ACTIVE,
+            anomaly_type="single_market",
+        )
+        existing_market_ids: set[int] = set()
+        for a in existing:
+            if a.id is not None:
+                links = await self._store.get_anomaly_markets(a.id)
+                for link in links:
+                    existing_market_ids.add(link.market_id)
+
         count = 0
         for mid in market_ids:
+            if mid in existing_market_ids:
+                continue
             anomalies = await self.detect_market(mid, window_configs, now_ms)
+            if not anomalies:
+                continue
+            # Only store the highest-severity anomaly per market
+            anomaly = max(anomalies, key=lambda a: a.severity)
+            anomalies = [anomaly]
             for anomaly in anomalies:
                 # Compute price_delta and volume_ratio for market links
                 wm = self._parse_window_minutes(anomaly.summary or "")
@@ -153,6 +188,18 @@ class AnomalyDetector(LoggerMixin):
                 count += 1
 
         return count
+
+    async def _get_market_title(self, market_id: int) -> str:
+        """Look up market title, with caching to avoid repeated DB hits."""
+        if market_id in self._title_cache:
+            return self._title_cache[market_id]
+        market = await self._store.get_market_by_id(market_id)
+        title = market.title if market else f"market_id={market_id}"
+        # Truncate very long titles (some Kalshi combo markets)
+        if len(title) > 80:
+            title = title[:77] + "..."
+        self._title_cache[market_id] = title
+        return title
 
     @staticmethod
     def _parse_window_minutes(summary: str) -> Optional[int]:

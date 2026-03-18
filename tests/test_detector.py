@@ -155,8 +155,8 @@ class TestAnomalyDetector:
         anomalies = await detector.detect_market(mid, [_default_config(10)], now)
 
         assert len(anomalies) >= 1
-        assert "price" in anomalies[0].summary.lower()
-        assert str(mid) in anomalies[0].summary
+        assert "Detector Test" in anomalies[0].summary
+        assert "50%" in anomalies[0].summary  # price from/to included
 
     async def test_detect_and_store(self, tmp_store):
         """detect_and_store persists anomalies to the database."""
