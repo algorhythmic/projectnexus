@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from nexus.core.logging import LoggerMixin
@@ -60,7 +61,15 @@ class DetectionLoop(LoggerMixin):
         self._last_cycle_ts = now_ms
 
         if not market_ids:
-            self.logger.info("detection_skip", reason="no markets with recent events")
+            # Log trading hours context for Kalshi (most active 9:30 AM–8 PM ET)
+            utc_hour = datetime.now(timezone.utc).hour
+            et_hour = (utc_hour - 4) % 24  # Approximate ET (ignores DST)
+            outside_peak = et_hour < 9 or et_hour >= 21
+            self.logger.info(
+                "detection_skip",
+                reason="no markets with recent events",
+                outside_peak_hours=outside_peak,
+            )
             return 0
 
         wc = WindowComputer(self._store)
@@ -101,6 +110,11 @@ class DetectionLoop(LoggerMixin):
             if pruned > 0:
                 self.logger.info("events_pruned", count=pruned)
 
+        thresholds = {
+            "price": self._window_configs[0].price_change_threshold,
+            "volume": self._window_configs[0].volume_spike_multiplier,
+            "zscore": self._window_configs[0].zscore_threshold,
+        } if self._window_configs else {}
         self.logger.info(
             "detection_cycle_complete",
             markets_scanned=len(market_ids),
@@ -108,6 +122,7 @@ class DetectionLoop(LoggerMixin):
             cluster_anomalies=cluster_count,
             cross_platform_anomalies=xplat_count,
             events_pruned=pruned,
+            thresholds=thresholds,
         )
         return count + cluster_count + xplat_count
 

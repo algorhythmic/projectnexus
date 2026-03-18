@@ -15,10 +15,11 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Phase 2: Anomaly detection, topic clustering, cluster correlation (Milestones 2.1–2.3)
 - Phase 3: Polymarket adapter, PostgreSQL migration, cross-platform correlation (Milestones 3.1–3.3)
 - Phase 4, Milestone 4.1: Convex sync layer (PostgreSQL → Convex via HTTP API)
+- Fly.io deployment: Running on `shared-cpu-1x` (1GB RAM), Kalshi production mode
+- Phase 4, Milestone 4.2: MarketFinder webapp wired to Nexus-synced Convex tables
 
 **Next milestones:**
-- Deploy Nexus to Fly.io
-- Phase 4, Milestone 4.2: Webapp updates (MarketFinder integration)
+- Anomaly detection threshold tuning (calibrate for prediction market data)
 - Phase 5: LLM narrative layer
 
 ## Repository Layout

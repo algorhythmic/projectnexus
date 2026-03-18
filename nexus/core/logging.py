@@ -36,6 +36,10 @@ def configure_logging() -> None:
     root.setLevel(getattr(logging, settings.log_level))
     # Clear any pre-existing handlers
     root.handlers.clear()
+
+    # Suppress noisy httpx/httpcore request logging (floods structured logs)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if settings.debug:
         root.addHandler(
             RichHandler(
