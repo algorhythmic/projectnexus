@@ -1,11 +1,15 @@
 """Async HTTP client for Convex mutations and queries."""
 
-import json
+import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from nexus.core.logging import LoggerMixin
+
+# Suppress httpx per-request INFO logs that flood structured pipeline output
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 class ConvexClient(LoggerMixin):

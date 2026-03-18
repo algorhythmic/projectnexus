@@ -1,6 +1,7 @@
 """Abstract base adapter for prediction market platforms."""
 
 import asyncio
+import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
@@ -8,6 +9,10 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 import httpx
 
 from nexus.core.logging import LoggerMixin
+
+# Suppress httpx per-request INFO logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from nexus.core.types import DiscoveredMarket, EventRecord
 
 
