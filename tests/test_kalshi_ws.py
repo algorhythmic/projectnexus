@@ -30,30 +30,28 @@ class TestNormalizeWsMessage:
             "type": "ticker",
             "msg": {
                 "market_ticker": "AAPL-UP-100",
-                "yes_ask": 65,
-                "yes_bid": 63,
-                "no_ask": 37,
-                "no_bid": 35,
-                "volume": 1200,
-                "last_price": 64,
+                "yes_ask_dollars": "0.6500",
+                "yes_bid_dollars": "0.6300",
+                "price_dollars": "0.6400",
+                "volume_fp": "1200.00",
             },
         }
         event = kalshi_adapter._normalize_ws_message(msg)
         assert event is not None
         assert event.event_type == EventType.PRICE_CHANGE
         assert event.market_id == 0
-        assert event.new_value == 0.65  # 65 cents → 0.65
+        assert event.new_value == 0.65
         meta = json.loads(event.metadata)
         assert meta["ticker"] == "AAPL-UP-100"
-        assert meta["volume"] == 1200
+        assert meta["volume"] == "1200.00"
 
     def test_ticker_message_decimal_price(self, kalshi_adapter):
-        """Ticker with price already in 0-1 range is kept as-is."""
+        """Ticker with _dollars price is parsed correctly."""
         msg = {
             "type": "ticker",
             "msg": {
                 "market_ticker": "BTC-50K",
-                "yes_ask": 0.45,
+                "yes_ask_dollars": "0.4500",
             },
         }
         event = kalshi_adapter._normalize_ws_message(msg)
@@ -88,11 +86,11 @@ class TestNormalizeWsMessage:
             "type": "trade",
             "msg": {
                 "market_ticker": "ELECTION-2024",
-                "yes_price": 55,
-                "count": 10,
+                "yes_price_dollars": "0.5500",
+                "count_fp": "10.00",
                 "side": "yes",
                 "taker_side": "yes",
-                "no_price": 45,
+                "no_price_dollars": "0.4500",
             },
         }
         event = kalshi_adapter._normalize_ws_message(msg)
@@ -102,7 +100,7 @@ class TestNormalizeWsMessage:
         assert event.new_value == 0.55
         meta = json.loads(event.metadata)
         assert meta["ticker"] == "ELECTION-2024"
-        assert meta["count"] == 10
+        assert meta["count"] == "10.00"
         assert meta["side"] == "yes"
 
     def test_trade_missing_price(self, kalshi_adapter):

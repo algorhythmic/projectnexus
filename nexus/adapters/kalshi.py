@@ -82,19 +82,31 @@ def _standardize_category(raw: Optional[str], title: str) -> str:
 
 
 def _calculate_yes_price(market: Dict[str, Any]) -> Optional[float]:
-    """Extract the yes price from a Kalshi market object."""
-    raw = (
-        market.get("yes_ask")
-        or market.get("yes_bid")
-        or market.get("last_price")
-    )
-    if raw is None:
-        return None
-    price = float(raw)
-    # Kalshi reports prices in cents (0-100); normalize to 0-1
-    if price > 1.0:
-        price /= 100.0
-    return max(0.0, min(1.0, price))
+    """Extract the yes price from a Kalshi market object.
+
+    Tries dollar-denominated fields (current API as of Jan 2026),
+    then falls back to legacy cent fields for backward compat.
+    Skips zero values (no orders / no trades).
+    """
+    for field in (
+        "yes_ask_dollars",
+        "yes_bid_dollars",
+        "last_price_dollars",
+        "yes_ask",
+        "yes_bid",
+        "last_price",
+    ):
+        val = market.get(field)
+        if val is None:
+            continue
+        price = float(val)
+        if price <= 0:
+            continue
+        # Legacy cents (0-100) → normalize to 0-1
+        if price > 1.0:
+            price /= 100.0
+        return max(0.0, min(1.0, price))
+    return None
 
 
 class KalshiAdapter(BaseAdapter):
@@ -371,21 +383,17 @@ class KalshiAdapter(BaseAdapter):
             return None
 
         payload = msg.get("msg", {})
-        # Kalshi WS v2 uses *_dollars suffix (e.g. yes_ask_dollars, price_dollars)
-        # Fall back to legacy field names for compatibility
+        # Kalshi ticker channel uses _dollars suffix (Jan 2026+)
         yes_price = (
             payload.get("yes_ask_dollars")
             or payload.get("yes_bid_dollars")
             or payload.get("price_dollars")
-            or payload.get("yes_ask")
-            or payload.get("yes_bid")
-            or payload.get("last_price")
         )
         if yes_price is None:
             return None
 
         price = float(yes_price)
-        # Dollars format is already 0.0-1.0; legacy cents format was 0-100
+        # _dollars values are already 0.0-1.0
         if price > 1.0:
             price /= 100.0
 
@@ -396,11 +404,9 @@ class KalshiAdapter(BaseAdapter):
             new_value=price,
             metadata=json.dumps({
                 "ticker": market_ticker,
-                "yes_ask": payload.get("yes_ask_dollars") or payload.get("yes_ask"),
-                "yes_bid": payload.get("yes_bid_dollars") or payload.get("yes_bid"),
-                "no_ask": payload.get("no_ask_dollars") or payload.get("no_ask"),
-                "no_bid": payload.get("no_bid_dollars") or payload.get("no_bid"),
-                "volume": payload.get("volume_fp") or payload.get("volume"),
+                "yes_ask": payload.get("yes_ask_dollars"),
+                "yes_bid": payload.get("yes_bid_dollars"),
+                "volume": payload.get("volume_fp"),
             }),
             timestamp=now_ms,
         )
@@ -414,9 +420,9 @@ class KalshiAdapter(BaseAdapter):
             return None
 
         payload = msg.get("msg", {})
+        # Kalshi trade channel uses _dollars suffix (Jan 2026+)
         yes_price = (
             payload.get("yes_price_dollars")
-            or payload.get("yes_price")
             or payload.get("price_dollars")
         )
         if yes_price is None:
@@ -433,7 +439,7 @@ class KalshiAdapter(BaseAdapter):
             new_value=price,
             metadata=json.dumps({
                 "ticker": market_ticker,
-                "count": payload.get("count"),
+                "count": payload.get("count_fp") or payload.get("count"),
                 "side": payload.get("side"),
                 "taker_side": payload.get("taker_side"),
                 "no_price": payload.get("no_price_dollars") or payload.get("no_price"),
@@ -476,9 +482,9 @@ class KalshiAdapter(BaseAdapter):
         if not external_id or not title:
             return None
 
-        # Filter: must be open and not past close time
+        # Filter: must be tradeable and not past close time
         status = raw.get("status")
-        if status not in ("active", "open", "initialized"):
+        if status not in ("active", "initialized"):
             return None
         close_time = raw.get("close_time")
         if close_time:
@@ -492,7 +498,9 @@ class KalshiAdapter(BaseAdapter):
         yes_price = _calculate_yes_price(raw)
         no_price = (1.0 - yes_price) if yes_price is not None else None
 
-        volume = raw.get("volume") or raw.get("open_interest") or 0
+        volume = raw.get("volume_fp") or raw.get("volume") or raw.get("open_interest_fp") or raw.get("open_interest") or 0
+        # `category` was removed from Kalshi API on Jan 5, 2026;
+        # fall back to event-level fields, then derive from title
         raw_category = (
             raw.get("category")
             or raw.get("event_category")
