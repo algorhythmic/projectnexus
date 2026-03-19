@@ -124,13 +124,16 @@ class TestSyncMarkets:
 
         count = await layer.sync_markets()
         assert count == 1
-        convex.mutation.assert_called_once()
-        call_args = convex.mutation.call_args
-        assert call_args[0][0] == "nexusSync:upsertMarkets"
-        markets = call_args[0][1]["markets"]
+        # Two mutations: upsert + cleanup
+        assert convex.mutation.call_count == 2
+        upsert_call = convex.mutation.call_args_list[0]
+        assert upsert_call[0][0] == "nexusSync:upsertMarkets"
+        markets = upsert_call[0][1]["markets"]
         assert len(markets) == 1
         assert markets[0]["platform"] == "kalshi"
         assert markets[0]["lastPrice"] == 0.65
+        cleanup_call = convex.mutation.call_args_list[1]
+        assert cleanup_call[0][0] == "nexusSync:cleanupStaleMarkets"
 
 
 class TestSyncAnomalies:

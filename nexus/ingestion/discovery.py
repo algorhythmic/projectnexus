@@ -78,18 +78,14 @@ class DiscoveryLoop(LoggerMixin):
                         )
                     )
 
-                # Skip event generation on first cycle (empty cache)
-                # to avoid N+1 queries for thousands of new markets
                 events: List[EventRecord] = []
                 if self._price_cache:
                     events = await self._generate_events(discovered)
-                    if events:
-                        await self.store.insert_events(events)
                 else:
-                    # Seed the price cache without generating events
-                    for m in discovered:
-                        cache_key = (m.platform.value, m.external_id)
-                        self._price_cache[cache_key] = m.yes_price
+                    # First cycle: seed cache AND emit price events
+                    events = await self._seed_with_events(discovered)
+                if events:
+                    await self.store.insert_events(events)
                 results[name] = new_count
                 self.logger.info(
                     "Discovery cycle complete",
@@ -162,6 +158,18 @@ class DiscoveryLoop(LoggerMixin):
                             timestamp=now_ms,
                         )
                     )
+                    # Also emit price_change so the materialized view
+                    # (v_current_market_state) picks up this price
+                    events.append(
+                        EventRecord(
+                            market_id=market_id,
+                            event_type=EventType.PRICE_CHANGE,
+                            old_value=None,
+                            new_value=m.yes_price,
+                            metadata=json.dumps({"source": "first_seen"}),
+                            timestamp=now_ms,
+                        )
+                    )
             elif m.yes_price is not None and m.yes_price != old_price:
                 events.append(
                     EventRecord(
@@ -176,5 +184,57 @@ class DiscoveryLoop(LoggerMixin):
 
             # Update the cache
             self._price_cache[market_key] = m.yes_price
+
+        return events
+
+    async def _seed_with_events(
+        self, markets: List[DiscoveredMarket]
+    ) -> List[EventRecord]:
+        """Seed the price cache AND emit price_change events.
+
+        On the very first discovery cycle the cache is empty.  Previously
+        we silently seeded the cache, which meant the materialized view
+        (``v_current_market_state``) never saw prices for markets that
+        existed before the process started.
+        """
+        events: List[EventRecord] = []
+        if not markets:
+            return events
+
+        now_ms = int(time.time() * 1000)
+
+        # Batch-load stored markets (same pattern as _generate_events)
+        platform = markets[0].platform.value
+        stored_markets = await self.store.get_active_markets(platform=platform)
+        stored_lookup: Dict[Tuple[str, str], int] = {
+            (m.platform.value, m.external_id): m.id
+            for m in stored_markets
+            if m.id is not None
+        }
+
+        for m in markets:
+            cache_key = (m.platform.value, m.external_id)
+            # Always seed the cache
+            self._price_cache[cache_key] = m.yes_price
+
+            # Emit price_change for markets already in DB with a price
+            if m.yes_price is not None:
+                market_id = stored_lookup.get(cache_key)
+                if market_id is not None:
+                    events.append(
+                        EventRecord(
+                            market_id=market_id,
+                            event_type=EventType.PRICE_CHANGE,
+                            old_value=None,
+                            new_value=m.yes_price,
+                            metadata=json.dumps(
+                                {
+                                    "source": "discovery_seed",
+                                    "title": m.title,
+                                }
+                            ),
+                            timestamp=now_ms,
+                        )
+                    )
 
         return events

@@ -135,6 +135,31 @@ export const upsertTrendingTopics = internalMutation({
 });
 
 // ----------------------------------------------------------------
+// Stale Market Cleanup — removes markets no longer in the valid set
+// ----------------------------------------------------------------
+
+export const cleanupStaleMarkets = internalMutation({
+  args: {
+    validMarketIds: v.array(v.number()),
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, { validMarketIds, batchSize }) => {
+    const limit = batchSize ?? 4000;
+    const validSet = new Set(validMarketIds);
+    const docs = await ctx.db.query("nexusMarkets").take(limit);
+
+    let deleted = 0;
+    for (const doc of docs) {
+      if (!validSet.has(doc.marketId)) {
+        await ctx.db.delete(doc._id);
+        deleted++;
+      }
+    }
+    return { deleted, scanned: docs.length };
+  },
+});
+
+// ----------------------------------------------------------------
 // Market Summaries — from v_market_summaries (every 2min)
 // ----------------------------------------------------------------
 

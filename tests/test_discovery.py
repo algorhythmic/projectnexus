@@ -48,6 +48,84 @@ class TestDiscoveryLoop:
         count = await tmp_store.get_market_count()
         assert count == 1
 
+    async def test_first_cycle_generates_price_events(self, tmp_store):
+        """First cycle (empty cache) emits price_change events for discovery seed."""
+        m1 = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="SEED-1",
+            title="Seed Price Test",
+            yes_price=0.70,
+        )
+        adapter = FakeAdapter([m1])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        await loop.run_once()
+
+        events = await tmp_store.get_events()
+        price_events = [e for e in events if e.event_type.value == "price_change"]
+        assert len(price_events) >= 1
+        assert price_events[0].new_value == 0.70
+        assert price_events[0].old_value is None
+
+    async def test_first_seen_market_emits_both_events(self, tmp_store):
+        """A new market on cycle 2 gets both new_market and price_change events."""
+        m1 = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="EXIST-1",
+            title="Existing Market",
+            yes_price=0.50,
+        )
+        adapter = FakeAdapter([m1])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        # First cycle: seeds cache
+        await loop.run_once()
+
+        # Second cycle: add a brand-new market alongside the existing one
+        m2 = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="NEW-1",
+            title="Brand New Market",
+            yes_price=0.40,
+        )
+        adapter._markets = [m1, m2]
+        await loop.run_once()
+
+        events = await tmp_store.get_events()
+        # Filter to events for the new market
+        # Need market_id for NEW-1 — look it up
+        stored = await tmp_store.get_active_markets(platform="kalshi")
+        new_market = [s for s in stored if s.external_id == "NEW-1"]
+        assert len(new_market) == 1
+        new_id = new_market[0].id
+
+        new_events = [e for e in events if e.market_id == new_id]
+        new_event_types = {e.event_type.value for e in new_events}
+        assert "new_market" in new_event_types
+        assert "price_change" in new_event_types
+
+    async def test_seed_skips_null_price(self, tmp_store):
+        """Markets with yes_price=None get no seed events on first cycle."""
+        m1 = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="NULL-1",
+            title="Null Price Market",
+            yes_price=None,
+        )
+        adapter = FakeAdapter([m1])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        await loop.run_once()
+
+        events = await tmp_store.get_events()
+        assert len(events) == 0
+
     async def test_second_cycle_generates_price_change_event(self, tmp_store):
         """Second cycle with different price generates a price_change event."""
         m1 = DiscoveredMarket(
@@ -61,7 +139,7 @@ class TestDiscoveryLoop:
             adapters=[adapter], store=tmp_store, interval_seconds=0
         )
 
-        # First cycle: upsert + new_market event
+        # First cycle: seeds cache + emits discovery_seed price events
         await loop.run_once()
 
         # Second cycle: same market, different price
@@ -75,10 +153,15 @@ class TestDiscoveryLoop:
         await loop.run_once()
 
         events = await tmp_store.get_events()
-        # First cycle seeds the price cache (no events generated).
-        # Second cycle detects the price change.
-        event_types = {e.event_type.value for e in events}
-        assert "price_change" in event_types
+        # First cycle emits a seed price_change (old_value=None).
+        # Second cycle detects the actual price change (0.50 → 0.65).
+        price_changes = [e for e in events if e.event_type.value == "price_change"]
+        assert len(price_changes) >= 2
+        # The latest price_change should have old_value=0.50
+        actual_change = [e for e in price_changes if e.old_value is not None]
+        assert len(actual_change) >= 1
+        assert actual_change[0].old_value == 0.50
+        assert actual_change[0].new_value == 0.65
 
     async def test_adapter_error_is_handled(self, tmp_store):
         """If an adapter raises, the loop logs it and continues."""

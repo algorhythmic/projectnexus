@@ -37,6 +37,7 @@ class SyncLayer(LoggerMixin):
         self._summary_interval = summary_interval
         self._topics_interval = topics_interval
         self._running = False
+        self._last_cleanup: float = 0.0
 
     # ------------------------------------------------------------------
     # One-shot sync methods
@@ -78,7 +79,42 @@ class SyncLayer(LoggerMixin):
                 "nexusSync:upsertMarkets", {"markets": batch}
             )
         self.logger.info("sync_markets", count=len(records))
+
+        # Periodically clean up stale Convex documents (every 5 min)
+        now = time.time()
+        if now - self._last_cleanup >= 300:
+            valid_ids = [r["marketId"] for r in records]
+            await self._cleanup_stale_markets(valid_ids)
+            self._last_cleanup = now
+
         return len(records)
+
+    async def _cleanup_stale_markets(self, valid_ids: List[int]) -> int:
+        """Remove Convex nexusMarkets docs not in the valid set.
+
+        Loops with batchSize=4000 until all records have been scanned,
+        staying under Convex's 32K read limit per mutation.
+        """
+        total_deleted = 0
+        batch_size = 4000
+
+        while True:
+            result = await self._convex.mutation(
+                "nexusSync:cleanupStaleMarkets",
+                {"validMarketIds": valid_ids, "batchSize": batch_size},
+            )
+            deleted = result.get("deleted", 0) if result else 0
+            scanned = result.get("scanned", 0) if result else 0
+            total_deleted += deleted
+
+            if scanned < batch_size:
+                break  # All records checked
+
+        if total_deleted > 0:
+            self.logger.info(
+                "cleanup_stale_markets", deleted=total_deleted
+            )
+        return total_deleted
 
     async def sync_anomalies(self) -> int:
         """Push active anomalies to Convex. Returns record count."""
@@ -190,6 +226,7 @@ class SyncLayer(LoggerMixin):
         last_market = 0.0
         last_summary = 0.0
         last_topics = 0.0
+        last_market_view = 0.0
 
         while self._running:
             now = time.time()
@@ -200,10 +237,10 @@ class SyncLayer(LoggerMixin):
                     if hasattr(self._store, "refresh_view"):
                         # v_active_anomalies is small — refresh every cycle
                         await self._store.refresh_view("v_active_anomalies")
-                        # v_current_market_state is heavy (LATERAL joins
-                        # across 144K+ markets) — refresh every 5 min
-                        if now - last_summary >= 300:
+                        # v_current_market_state is heavy — refresh every 5 min
+                        if now - last_market_view >= 300:
                             await self._store.refresh_view("v_current_market_state")
+                            last_market_view = now
                     await self.sync_markets()
                     await self.sync_anomalies()
                     last_market = now
