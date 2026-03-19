@@ -875,10 +875,23 @@ class PostgresStore(BaseStore, LoggerMixin):
     # Materialized view queries (Phase 4 sync layer)
     # ------------------------------------------------------------------
 
-    async def query_market_state(self) -> List[dict]:
-        """Read v_current_market_state for sync."""
+    async def query_market_state(self, with_events_only: bool = False) -> List[dict]:
+        """Read v_current_market_state for sync.
+
+        Args:
+            with_events_only: If True, only return markets that have at least
+                one event (price or volume). Dramatically reduces result set
+                from 144K+ discovered markets to the ~200 actually tracked.
+        """
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM v_current_market_state")
+            if with_events_only:
+                rows = await conn.fetch(
+                    """SELECT * FROM v_current_market_state
+                       WHERE last_price IS NOT NULL
+                          OR last_volume IS NOT NULL"""
+                )
+            else:
+                rows = await conn.fetch("SELECT * FROM v_current_market_state")
         return [dict(r) for r in rows]
 
     async def query_active_anomalies(self) -> List[dict]:
@@ -894,9 +907,11 @@ class PostgresStore(BaseStore, LoggerMixin):
         return [dict(r) for r in rows]
 
     async def query_market_summaries(self) -> List[dict]:
-        """Read v_market_summaries for sync."""
+        """Read v_market_summaries for sync — only markets with events."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM v_market_summaries")
+            rows = await conn.fetch(
+                "SELECT * FROM v_market_summaries WHERE event_count > 0"
+            )
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------

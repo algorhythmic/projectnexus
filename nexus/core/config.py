@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     )
 
     kalshi_discovery_max_pages: int = Field(
-        default=30,
+        default=5,
         description="Max pages to fetch during Kalshi discovery (0 = unlimited, 200 markets/page)",
     )
     discovery_staleness_hours: int = Field(
@@ -245,7 +245,7 @@ class Settings(BaseSettings):
         description="Sync market state to Convex every N seconds",
     )
     sync_summary_interval_seconds: int = Field(
-        default=120,
+        default=1800,
         description="Sync market summaries to Convex every N seconds",
     )
     sync_topics_interval_seconds: int = Field(

@@ -46,8 +46,12 @@ class SyncLayer(LoggerMixin):
     SYNC_BATCH_SIZE = 500
 
     async def sync_markets(self) -> int:
-        """Push current market state to Convex. Returns record count."""
-        rows = await self._store.query_market_state()
+        """Push current market state to Convex. Returns record count.
+
+        Only syncs markets that have received at least one event (price
+        or volume) to avoid pushing 144K+ discovered-but-untracked markets.
+        """
+        rows = await self._store.query_market_state(with_events_only=True)
         if not rows:
             return 0
 
@@ -194,13 +198,17 @@ class SyncLayer(LoggerMixin):
                 # Markets + anomalies (highest frequency)
                 if now - last_market >= self._market_interval:
                     if hasattr(self._store, "refresh_view"):
-                        await self._store.refresh_view("v_current_market_state")
+                        # v_active_anomalies is small — refresh every cycle
                         await self._store.refresh_view("v_active_anomalies")
+                        # v_current_market_state is heavy (LATERAL joins
+                        # across 144K+ markets) — refresh every 5 min
+                        if now - last_summary >= 300:
+                            await self._store.refresh_view("v_current_market_state")
                     await self.sync_markets()
                     await self.sync_anomalies()
                     last_market = now
 
-                # Market summaries
+                # Market summaries (every 30 min by default)
                 if now - last_summary >= self._summary_interval:
                     if hasattr(self._store, "refresh_view"):
                         await self._store.refresh_view("v_market_summaries")
