@@ -165,14 +165,29 @@ class KalshiAdapter(BaseAdapter):
     # ------------------------------------------------------------------
 
     async def discover(self) -> List[DiscoveredMarket]:
-        """Enumerate all active markets via cursor-paginated REST calls."""
+        """Enumerate active markets via cursor-paginated REST calls.
+
+        Uses Kalshi API filters to reduce result volume:
+        - status=open: only tradeable markets
+        - min_close_ts: skip markets closing in <1h (about to expire)
+        - mve_filter=exclude: skip multivariate combo markets (they have
+          very long titles like "yes A,yes B,yes C" and rarely trade)
+        """
         all_markets: List[DiscoveredMarket] = []
         cursor: Optional[str] = None
         max_pages = self._settings.kalshi_discovery_max_pages
         page = 0
 
+        # Only discover markets closing more than 1 hour from now
+        min_close = int(time.time()) + 3600
+
         while True:
-            params: Dict[str, Any] = {"limit": 200, "status": "open"}
+            params: Dict[str, Any] = {
+                "limit": 200,
+                "status": "open",
+                "min_close_ts": min_close,
+                "mve_filter": "exclude",
+            }
             if cursor:
                 params["cursor"] = cursor
 
