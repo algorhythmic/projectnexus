@@ -254,10 +254,11 @@ class SyncLayer(LoggerMixin):
                     await self.sync_market_summaries()
                     last_summary = now
 
-                # Trending topics
+                # Trending topics + hourly activity (low-priority, every 5 min)
                 if now - last_topics >= self._topics_interval:
                     if hasattr(self._store, "refresh_view"):
                         await self._store.refresh_view("v_trending_topics")
+                        await self._store.refresh_view("v_hourly_activity")
                     await self.sync_trending_topics()
                     last_topics = now
 

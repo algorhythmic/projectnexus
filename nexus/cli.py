@@ -2,7 +2,9 @@
 
 import asyncio
 import contextlib
+import json as _json
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -717,6 +719,132 @@ def anomaly_stats(
             console.print(f"  Target: < 50/day, Current: {alerts_per_day:.1f}/day")
 
     asyncio.run(_stats())
+
+
+@app.command()
+def activity(
+    hours: int = typer.Option(168, help="Lookback window in hours (default 7 days)"),
+    by_category: bool = typer.Option(False, "--by-category", help="Group by category"),
+    raw: bool = typer.Option(False, "--raw", help="Output raw JSON instead of tables"),
+) -> None:
+    """Show hourly activity stats from v_hourly_activity."""
+    if settings.store_backend != "postgres":
+        console.print("[bold red]activity requires store_backend='postgres'[/bold red]")
+        raise typer.Exit(1)
+
+    async def _activity() -> List[dict]:
+        from nexus.store.postgres import PostgresStore
+
+        store = PostgresStore(
+            dsn=settings.postgres_dsn,
+            pool_min=settings.postgres_pool_min,
+            pool_max=settings.postgres_pool_max,
+        )
+        await store.initialize()
+        rows = await store.query_hourly_activity(hours=hours)
+        await store.close()
+        return rows
+
+    rows = asyncio.run(_activity())
+
+    if not rows:
+        console.print("No hourly activity data. Run the pipeline first to populate events.")
+        return
+
+    if raw:
+        # Convert Decimal types to float for JSON serialization
+        for r in rows:
+            for k, v in r.items():
+                if hasattr(v, "as_tuple"):  # Decimal
+                    r[k] = float(v)
+        console.print(_json.dumps(rows, indent=2))
+        return
+
+    # ── Peak hours table: events per hour (ET), averaged over days ──
+    hour_events: defaultdict[int, list[int]] = defaultdict(list)
+    hour_markets: defaultdict[int, list[int]] = defaultdict(list)
+    for r in rows:
+        h = int(r["hour_et"])
+        hour_events[h].append(int(r["event_count"]))
+        hour_markets[h].append(int(r["active_markets"]))
+
+    peak_table = Table(title=f"Peak Hours (ET) — last {hours}h")
+    peak_table.add_column("Hour (ET)", style="cyan", justify="right")
+    peak_table.add_column("Avg Events", style="green", justify="right")
+    peak_table.add_column("Avg Markets", style="blue", justify="right")
+    peak_table.add_column("Activity", style="yellow")
+
+    max_avg = max(
+        (sum(v) / len(v) for v in hour_events.values()), default=1
+    )
+
+    for h in range(24):
+        evts = hour_events.get(h, [])
+        mkts = hour_markets.get(h, [])
+        avg_e = sum(evts) / len(evts) if evts else 0
+        avg_m = sum(mkts) / len(mkts) if mkts else 0
+        bar_len = int((avg_e / max_avg) * 20) if max_avg > 0 else 0
+        bar = "█" * bar_len
+
+        style = ""
+        if 9 <= h <= 20:
+            style = "bold"  # Trading hours
+
+        peak_table.add_row(
+            f"[{style}]{h:02d}:00[/{style}]" if style else f"{h:02d}:00",
+            f"{avg_e:.0f}",
+            f"{avg_m:.0f}",
+            bar,
+        )
+
+    console.print(peak_table)
+
+    # ── Category breakdown ──
+    if by_category:
+        cat_events: defaultdict[str, int] = defaultdict(int)
+        cat_markets: defaultdict[str, set] = defaultdict(set)
+        for r in rows:
+            cat = r["category"] or "Unknown"
+            cat_events[cat] += int(r["event_count"])
+            # Use hour_bucket as a proxy for unique market counting
+            cat_markets[cat].add(int(r["active_markets"]))
+
+        cat_table = Table(title="Activity by Category")
+        cat_table.add_column("Category", style="cyan")
+        cat_table.add_column("Total Events", style="green", justify="right")
+        cat_table.add_column("Avg Markets/Hour", style="blue", justify="right")
+
+        for cat in sorted(cat_events, key=cat_events.get, reverse=True):
+            avg_m = sum(cat_markets[cat]) / len(cat_markets[cat]) if cat_markets[cat] else 0
+            cat_table.add_row(cat, f"{cat_events[cat]:,}", f"{avg_m:.0f}")
+
+        console.print(cat_table)
+
+    # ── Daily pattern: weekday vs weekend ──
+    weekday_events = 0
+    weekend_events = 0
+    weekday_count = 0
+    weekend_count = 0
+    for r in rows:
+        dow = int(r["day_of_week"])
+        ec = int(r["event_count"])
+        if dow in (0, 6):  # Sunday=0, Saturday=6
+            weekend_events += ec
+            weekend_count += 1
+        else:
+            weekday_events += ec
+            weekday_count += 1
+
+    daily_table = Table(title="Daily Pattern")
+    daily_table.add_column("Period", style="cyan")
+    daily_table.add_column("Total Events", style="green", justify="right")
+    daily_table.add_column("Avg Events/Bucket", style="blue", justify="right")
+
+    wd_avg = weekday_events / weekday_count if weekday_count else 0
+    we_avg = weekend_events / weekend_count if weekend_count else 0
+    daily_table.add_row("Weekday", f"{weekday_events:,}", f"{wd_avg:.0f}")
+    daily_table.add_row("Weekend", f"{weekend_events:,}", f"{we_avg:.0f}")
+    console.print(daily_table)
 
 
 @app.command()
