@@ -18,8 +18,18 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Fly.io deployment: Running on `shared-cpu-1x` (1GB RAM), Kalshi production mode
 - Phase 4, Milestone 4.2: MarketFinder webapp wired to Nexus-synced Convex tables
 
+**Operational work completed:**
+- Anomaly thresholds tuned for prediction markets (3% price, 2x volume, 1.5 z-score)
+- Anomaly summaries enriched with market titles and price from/to
+- Logarithmic severity scaling (was linear, all anomalies capped at 1.00)
+- Anomaly deduplication (skip markets with existing active anomalies)
+- Discovery filtered: exclude combo markets (`mve_filter`), near-expiry (`min_close_ts`)
+- Sync optimized: only markets with events synced to Convex (597 vs 90K+)
+- OOM fix: detection capped at 200 markets/cycle, init from 10min ago
+
 **Next milestones:**
-- Anomaly detection threshold tuning (calibrate for prediction market data)
+- DB cleanup: purge stale markets to get Supabase under 500MB free tier
+- Run initial topic clustering (`nexus cluster`) to enable trending topics
 - Phase 5: LLM narrative layer
 
 ## Repository Layout
@@ -101,7 +111,9 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **Rate limits (Basic tier):** 20 reads/sec, 10 writes/sec — we default to 15 reads/sec for safety
 - **Pagination:** Cursor-based (`cursor` param in response), not page-number based
 - **WebSocket:** `wss://api.elections.kalshi.com/trade-api/ws/v2`
-- **~3,500 markets**, defined trading hours
+- **Discovery filters:** `mve_filter=exclude` (skip combo markets), `min_close_ts` (skip near-expiry), 5 pages max (1000 markets/cycle)
+- **Data model:** Series → Events → Markets hierarchy. `series_ticker` groups recurring markets (e.g., daily BTC price markets)
+- **~3,500+ active non-combo markets**, defined trading hours (most active 9:30 AM–8 PM ET)
 
 ### Polymarket
 - **REST:** `https://gamma-api.polymarket.com`
@@ -141,7 +153,7 @@ Nexus and MarketFinder are **separate systems** connected only by a sync layer (
 
 - **GitHub repo:** `algorhythmic/projectnexus`
 - **Supabase:** PostgreSQL host (use direct connection port 5432, NOT PgBouncer 6543)
-- **Fly.io:** Deployment config ready (`Dockerfile` + `fly.toml`), not yet deployed
+- **Fly.io:** DEPLOYED and running (`shared-cpu-1x`, 1GB RAM, app `projectnexus`). OOM-prone at 730MB avg RSS — detection capped at 200 markets/cycle
 - **Convex (new):** `deafening-starling-749` — fresh dev cloud deployment for Nexus sync. Cloud URL: `https://deafening-starling-749.convex.cloud`. Deploy key set via `fly secrets set CONVEX_DEPLOY_KEY=...`.
 - **Convex (legacy):** `sensible-parakeet-564` — old MarketFinder deployment, schema drift from ETL repo overwriting via `npx convex dev`. Crons accumulated 461.9MB in `priceHistory`. Should be paused or deleted — no longer used by Nexus.
 - **Containerized auth:** Inline PEM key support via `KALSHI_PRIVATE_KEY_PEM` env var (for Fly.io deployment where key file isn't available)
