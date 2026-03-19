@@ -11,6 +11,7 @@ from nexus.correlation.correlator import ClusterCorrelator
 from nexus.correlation.cross_platform import CrossPlatformCorrelator
 from nexus.correlation.detector import AnomalyDetector
 from nexus.correlation.windows import WindowComputer
+from nexus.ingestion.health import _get_rss_mb
 from nexus.store.base import BaseStore
 
 
@@ -29,6 +30,7 @@ class DetectionLoop(LoggerMixin):
         cross_platform_enabled: bool = False,
         cross_platform_window_minutes: int = 60,
         retention_days: int = 0,
+        max_markets_per_cycle: int = 200,
     ) -> None:
         self._store = store
         self._window_configs = window_configs
@@ -40,6 +42,7 @@ class DetectionLoop(LoggerMixin):
         self._cross_platform_enabled = cross_platform_enabled
         self._cross_platform_window_minutes = cross_platform_window_minutes
         self._retention_days = retention_days
+        self._max_markets = max_markets_per_cycle
         self._running = False
         self._task: Optional[asyncio.Task] = None
         # Start from 10 minutes ago (not 0) to avoid scanning all
@@ -64,7 +67,7 @@ class DetectionLoop(LoggerMixin):
 
         # Cap to prevent OOM on the 1GB Fly.io VM — each market requires
         # multiple DB round-trips for window computation + baseline sampling
-        max_markets = 200
+        max_markets = self._max_markets
         if len(market_ids) > max_markets:
             self.logger.info(
                 "detection_cap",
@@ -84,6 +87,8 @@ class DetectionLoop(LoggerMixin):
                 outside_peak_hours=outside_peak,
             )
             return 0
+
+        rss_before = _get_rss_mb()
 
         wc = WindowComputer(self._store)
         detector = AnomalyDetector(
@@ -128,6 +133,12 @@ class DetectionLoop(LoggerMixin):
             "volume": self._window_configs[0].volume_spike_multiplier,
             "zscore": self._window_configs[0].zscore_threshold,
         } if self._window_configs else {}
+        rss_after = _get_rss_mb()
+        rss_extra: dict = {}
+        if rss_before is not None and rss_after is not None:
+            rss_extra["rss_before_mb"] = rss_before
+            rss_extra["rss_after_mb"] = rss_after
+            rss_extra["rss_delta_mb"] = round(rss_after - rss_before, 1)
         self.logger.info(
             "detection_cycle_complete",
             markets_scanned=len(market_ids),
@@ -136,6 +147,7 @@ class DetectionLoop(LoggerMixin):
             cross_platform_anomalies=xplat_count,
             events_pruned=pruned,
             thresholds=thresholds,
+            **rss_extra,
         )
         return count + cluster_count + xplat_count
 

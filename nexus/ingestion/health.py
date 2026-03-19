@@ -6,10 +6,27 @@ ingestion manager.
 """
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.ingestion.metrics import MetricsCollector
+
+
+def _get_rss_mb() -> Optional[float]:
+    """Return current RSS in MB by reading /proc/self/status (Linux only).
+
+    Returns None on platforms where /proc is unavailable.
+    """
+    try:
+        status = Path("/proc/self/status").read_text()
+        for line in status.splitlines():
+            if line.startswith("VmRSS:"):
+                kb = int(line.split()[1])
+                return round(kb / 1024, 1)
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+    return None
 
 
 class HealthReporter(LoggerMixin):
@@ -56,6 +73,10 @@ class HealthReporter(LoggerMixin):
         """Main loop: take snapshot, log it, sleep."""
         while True:
             snap = self._metrics.snapshot()
+            extra: dict = {}
+            rss = _get_rss_mb()
+            if rss is not None:
+                extra["rss_mb"] = rss
             self.logger.info(
                 "Pipeline health",
                 uptime_s=snap.uptime_seconds,
@@ -66,5 +87,6 @@ class HealthReporter(LoggerMixin):
                 ws_reconnects=snap.ws_reconnect_count,
                 queue_depth=snap.queue_depth,
                 errors=snap.error_counts,
+                **extra,
             )
             await asyncio.sleep(self._interval)

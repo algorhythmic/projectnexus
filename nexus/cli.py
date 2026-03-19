@@ -535,9 +535,13 @@ def validate(
 
 
 @app.command()
-def detect() -> None:
-    """Run a single anomaly detection cycle (includes cluster correlation)."""
+def detect(
+    lookback: int = typer.Option(10, help="Scan markets with events in last N minutes"),
+    cap: int = typer.Option(200, help="Max markets to scan per cycle"),
+) -> None:
+    """Run a single anomaly detection cycle with RSS profiling."""
     from nexus.correlation.detection_loop import DetectionLoop
+    from nexus.ingestion.health import _get_rss_mb
     from nexus.store import create_store
 
     async def _detect() -> None:
@@ -554,11 +558,40 @@ def detect() -> None:
             cross_platform_enabled=settings.cross_platform_enabled,
             cross_platform_window_minutes=settings.cross_platform_window_minutes,
             retention_days=settings.retention_days,
+            max_markets_per_cycle=cap,
         )
+        # Override the lookback window
+        loop._last_cycle_ts = int(time.time() * 1000) - (lookback * 60 * 1000)
+
+        # Check qualifying markets before running
+        market_ids = await store.get_markets_with_recent_events(loop._last_cycle_ts)
+        console.print(f"Markets with events in last {lookback}min: [bold]{len(market_ids)}[/bold]")
+        if len(market_ids) > cap:
+            console.print(f"  Capped to {cap} (use --cap to change)")
+
+        rss_before = _get_rss_mb()
+
         count = await loop.run_once()
+
+        rss_after = _get_rss_mb()
         await store.close()
 
-        console.print(f"Detection complete: {count} anomalies found")
+        # Results table
+        table = Table(title="Detection Cycle Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Markets scanned", str(min(len(market_ids), cap)))
+        table.add_row("Anomalies found", str(count))
+        table.add_row("Lookback window", f"{lookback} min")
+        if rss_before is not None and rss_after is not None:
+            delta = rss_after - rss_before
+            delta_style = "red" if delta > 50 else "yellow" if delta > 20 else "green"
+            table.add_row("RSS before", f"{rss_before:.1f} MB")
+            table.add_row("RSS after", f"{rss_after:.1f} MB")
+            table.add_row("RSS delta", f"[{delta_style}]{delta:+.1f} MB[/{delta_style}]")
+        else:
+            table.add_row("RSS", "[dim]unavailable (Linux only)[/dim]")
+        console.print(table)
 
     asyncio.run(_detect())
 
