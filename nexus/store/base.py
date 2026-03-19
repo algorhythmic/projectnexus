@@ -266,6 +266,28 @@ class BaseStore(ABC):
         ...
 
     # ------------------------------------------------------------------
+    # Market lifecycle (resolution detection)
+    # ------------------------------------------------------------------
+
+    async def deactivate_market(self, market_id: int) -> bool:
+        """Set is_active=FALSE for a single market.
+
+        Returns True if the market was deactivated (was active),
+        False if already inactive or not found.
+        """
+        return False
+
+    async def deactivate_expired_markets(self, now_iso: str) -> int:
+        """Deactivate active markets whose end_date has passed.
+
+        Args:
+            now_iso: Current time as ISO 8601 string.
+
+        Returns count of deactivated markets.
+        """
+        return 0
+
+    # ------------------------------------------------------------------
     # Targeted queries
     # ------------------------------------------------------------------
 
@@ -285,6 +307,19 @@ class BaseStore(ABC):
         """Delete events with timestamp < older_than (Unix ms).
         Returns count of deleted events."""
         ...
+
+    # ------------------------------------------------------------------
+    # Hourly activity aggregation
+    # ------------------------------------------------------------------
+
+    async def query_hourly_activity(
+        self, hours: int = 168
+    ) -> List[dict]:
+        """Read hourly activity stats. PostgreSQL-only (materialized view).
+
+        Returns empty list for non-PG stores.
+        """
+        return []
 
     @abstractmethod
     async def close(self) -> None:

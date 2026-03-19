@@ -188,6 +188,116 @@ class TestEvents:
         assert count == 0
 
 
+class TestDeactivateMarket:
+    async def test_deactivate_active_market(self, tmp_store):
+        """deactivate_market sets is_active=False for an active market."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="DEACT-1",
+            title="Deactivate Test",
+        )
+        await tmp_store.upsert_markets([market])
+        stored = await tmp_store.get_market_by_external_id("kalshi", "DEACT-1")
+        assert stored is not None and stored.id is not None
+        assert stored.is_active is True
+
+        result = await tmp_store.deactivate_market(stored.id)
+        assert result is True
+
+        updated = await tmp_store.get_market_by_id(stored.id)
+        assert updated is not None
+        assert updated.is_active is False
+
+    async def test_deactivate_already_inactive(self, tmp_store):
+        """deactivate_market returns False for an already-inactive market."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="DEACT-2",
+            title="Already Inactive",
+        )
+        await tmp_store.upsert_markets([market])
+        stored = await tmp_store.get_market_by_external_id("kalshi", "DEACT-2")
+        assert stored is not None and stored.id is not None
+
+        # First deactivation
+        await tmp_store.deactivate_market(stored.id)
+        # Second deactivation should return False
+        result = await tmp_store.deactivate_market(stored.id)
+        assert result is False
+
+    async def test_deactivate_nonexistent(self, tmp_store):
+        """deactivate_market returns False for a non-existent market."""
+        result = await tmp_store.deactivate_market(99999)
+        assert result is False
+
+    async def test_deactivate_removes_from_active_list(self, tmp_store):
+        """Deactivated markets don't appear in get_active_markets."""
+        m1 = DiscoveredMarket(
+            platform=Platform.KALSHI, external_id="ACT-1", title="Active"
+        )
+        m2 = DiscoveredMarket(
+            platform=Platform.KALSHI, external_id="ACT-2", title="Will Deactivate"
+        )
+        await tmp_store.upsert_markets([m1, m2])
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "ACT-2")
+        assert stored is not None and stored.id is not None
+        await tmp_store.deactivate_market(stored.id)
+
+        active = await tmp_store.get_active_markets(platform="kalshi")
+        assert len(active) == 1
+        assert active[0].external_id == "ACT-1"
+
+
+class TestDeactivateExpiredMarkets:
+    async def test_deactivates_past_end_date(self, tmp_store):
+        """Markets with end_date in the past are deactivated."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="EXP-1",
+            title="Expired Market",
+            end_date="2020-01-01T00:00:00Z",
+        )
+        await tmp_store.upsert_markets([market])
+
+        count = await tmp_store.deactivate_expired_markets("2025-01-01T00:00:00+00:00")
+        assert count == 1
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "EXP-1")
+        assert stored is not None
+        assert stored.is_active is False
+
+    async def test_keeps_future_end_date(self, tmp_store):
+        """Markets with end_date in the future are not deactivated."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="FUT-1",
+            title="Future Market",
+            end_date="2030-12-31T23:59:59Z",
+        )
+        await tmp_store.upsert_markets([market])
+
+        count = await tmp_store.deactivate_expired_markets("2025-01-01T00:00:00+00:00")
+        assert count == 0
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "FUT-1")
+        assert stored is not None
+        assert stored.is_active is True
+
+    async def test_ignores_null_end_date(self, tmp_store):
+        """Markets with no end_date are not deactivated."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="NULL-END",
+            title="No End Date",
+            end_date=None,
+        )
+        await tmp_store.upsert_markets([market])
+
+        count = await tmp_store.deactivate_expired_markets("2025-01-01T00:00:00+00:00")
+        assert count == 0
+
+
 class TestStats:
     async def test_counts(self, tmp_store):
         """get_market_count and get_event_count return correct numbers."""

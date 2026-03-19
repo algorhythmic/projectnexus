@@ -355,10 +355,10 @@ class KalshiAdapter(BaseAdapter):
                     delay = self._settings.ws_reconnect_delay
 
                     # Subscribe to channels
-                    await self._send_subscribe(ws, tickers, ["ticker", "trade"])
+                    await self._send_subscribe(ws, tickers, ["ticker", "trade", "market_lifecycle"])
                     self.logger.info(
                         "Subscribed to Kalshi channels",
-                        channels=["ticker", "trade"],
+                        channels=["ticker", "trade", "market_lifecycle"],
                         tickers=len(tickers),
                     )
 

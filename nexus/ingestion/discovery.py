@@ -7,6 +7,7 @@ into the store, and emits events for newly seen markets and price changes.
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from nexus.adapters.base import BaseAdapter
@@ -102,6 +103,11 @@ class DiscoveryLoop(LoggerMixin):
                     error=str(exc),
                 )
                 results[name] = 0
+
+        # Check for markets past their end_date (catches resolutions
+        # missed during WebSocket disconnects or restarts)
+        await self._check_end_date_expiry()
+
         return results
 
     async def stop(self) -> None:
@@ -186,6 +192,17 @@ class DiscoveryLoop(LoggerMixin):
             self._price_cache[market_key] = m.yes_price
 
         return events
+
+    async def _check_end_date_expiry(self) -> int:
+        """Deactivate active markets whose end_date has passed."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        expired = await self.store.deactivate_expired_markets(now_iso)
+        if expired > 0:
+            self.logger.info(
+                "Deactivated expired markets by end_date",
+                count=expired,
+            )
+        return expired
 
     async def _seed_with_events(
         self, markets: List[DiscoveredMarket]

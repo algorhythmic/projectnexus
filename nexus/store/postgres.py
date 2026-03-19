@@ -120,6 +120,7 @@ _MATERIALIZED_VIEWS = frozenset({
     "v_active_anomalies",
     "v_trending_topics",
     "v_market_summaries",
+    "v_hourly_activity",
 })
 
 _VIEWS_SQL = """
@@ -204,6 +205,25 @@ GROUP BY m.id, m.platform, m.title, m.category;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_v_market_summaries_id
     ON v_market_summaries(market_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS v_hourly_activity AS
+SELECT
+    (timestamp / 3600000) * 3600000 AS hour_bucket,
+    EXTRACT(HOUR FROM TO_TIMESTAMP(timestamp / 1000.0) AT TIME ZONE 'America/New_York') AS hour_et,
+    EXTRACT(DOW FROM TO_TIMESTAMP(timestamp / 1000.0) AT TIME ZONE 'America/New_York') AS day_of_week,
+    m.category,
+    e.event_type,
+    COUNT(*) AS event_count,
+    COUNT(DISTINCT e.market_id) AS active_markets,
+    AVG(CASE WHEN e.event_type = 'price_change' THEN ABS(e.new_value - COALESCE(e.old_value, e.new_value)) END) AS avg_price_delta,
+    SUM(CASE WHEN e.event_type = 'trade' THEN 1 ELSE 0 END) AS trade_count
+FROM events e
+JOIN markets m ON m.id = e.market_id
+WHERE e.timestamp > EXTRACT(EPOCH FROM NOW() - INTERVAL '7 days') * 1000
+GROUP BY hour_bucket, hour_et, day_of_week, m.category, e.event_type;
+
+CREATE INDEX IF NOT EXISTS idx_v_hourly_activity_hour
+    ON v_hourly_activity(hour_et);
 """
 
 
@@ -253,6 +273,13 @@ class PostgresStore(BaseStore, LoggerMixin):
                 await conn.execute(
                     "DROP MATERIALIZED VIEW IF EXISTS v_current_market_state CASCADE"
                 )
+            # Ensure v_hourly_activity exists (added after initial deployment)
+            try:
+                await conn.fetchrow(
+                    "SELECT hour_bucket FROM v_hourly_activity LIMIT 0"
+                )
+            except asyncpg.UndefinedTableError:
+                pass  # Will be created by _VIEWS_SQL below
             # Materialized views — create only if they don't exist
             try:
                 await conn.execute(_VIEWS_SQL)
@@ -868,6 +895,29 @@ class PostgresStore(BaseStore, LoggerMixin):
         return self._row_to_cross_platform_link(row) if row else None
 
     # ------------------------------------------------------------------
+    # Market lifecycle (resolution detection)
+    # ------------------------------------------------------------------
+
+    async def deactivate_market(self, market_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE markets SET is_active = FALSE WHERE id = $1 AND is_active = TRUE",
+                market_id,
+            )
+        return int(result.split()[-1]) > 0
+
+    async def deactivate_expired_markets(self, now_iso: str) -> int:
+        sql = """
+            UPDATE markets SET is_active = FALSE
+            WHERE is_active = TRUE
+              AND end_date IS NOT NULL AND end_date != ''
+              AND end_date::timestamptz <= $1::timestamptz
+        """
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(sql, now_iso)
+        return int(result.split()[-1])
+
+    # ------------------------------------------------------------------
     # Targeted queries
     # ------------------------------------------------------------------
 
@@ -933,6 +983,18 @@ class PostgresStore(BaseStore, LoggerMixin):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM v_market_summaries WHERE event_count > 0"
+            )
+        return [dict(r) for r in rows]
+
+    async def query_hourly_activity(
+        self, hours: int = 168
+    ) -> List[dict]:
+        """Read v_hourly_activity for trend analysis."""
+        since_ms = int((time.time() - hours * 3600) * 1000)
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM v_hourly_activity WHERE hour_bucket >= $1 ORDER BY hour_bucket",
+                since_ms,
             )
         return [dict(r) for r in rows]
 

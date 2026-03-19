@@ -707,6 +707,47 @@ class SQLiteStore(BaseStore, LoggerMixin):
         return self._row_to_cross_platform_link(row) if row else None
 
     # ------------------------------------------------------------------
+    # Market lifecycle (resolution detection)
+    # ------------------------------------------------------------------
+
+    async def deactivate_market(self, market_id: int) -> bool:
+        cursor = await self.db.execute(
+            "UPDATE markets SET is_active = 0 WHERE id = ? AND is_active = 1",
+            (market_id,),
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def deactivate_expired_markets(self, now_iso: str) -> int:
+        from datetime import datetime
+
+        # SQLite lacks native ISO 8601 comparison — fetch and parse in Python
+        cursor = await self.db.execute(
+            "SELECT id, end_date FROM markets WHERE is_active = 1 AND end_date IS NOT NULL AND end_date != ''"
+        )
+        rows = await cursor.fetchall()
+
+        now = datetime.fromisoformat(now_iso)
+        expired_ids = []
+        for row in rows:
+            try:
+                end_dt = datetime.fromisoformat(row[1])
+                if end_dt <= now:
+                    expired_ids.append(row[0])
+            except (ValueError, TypeError):
+                continue
+
+        if expired_ids:
+            placeholders = ",".join("?" for _ in expired_ids)
+            cursor = await self.db.execute(
+                f"UPDATE markets SET is_active = 0 WHERE id IN ({placeholders})",
+                expired_ids,
+            )
+            await self.db.commit()
+            return cursor.rowcount
+        return 0
+
+    # ------------------------------------------------------------------
     # Targeted queries
     # ------------------------------------------------------------------
 
@@ -753,9 +794,10 @@ class SQLiteStore(BaseStore, LoggerMixin):
             title=row[3],
             description=row[4],
             category=row[5],
-            is_active=bool(row[6]),
-            first_seen_at=row[7],
-            last_updated_at=row[8],
+            # row[6] is end_date — not mapped to MarketRecord
+            is_active=bool(row[7]),
+            first_seen_at=row[8],
+            last_updated_at=row[9],
         )
 
     @staticmethod

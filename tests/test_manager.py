@@ -178,3 +178,110 @@ class TestIngestionManager:
         manager._running = True
         await manager.stop()
         assert manager._running is False
+
+    async def test_terminal_status_change_deactivates_market(
+        self, tmp_store, sample_settings
+    ):
+        """STATUS_CHANGE with terminal status deactivates the market."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="TERM-1",
+            title="Terminal Status Test",
+            yes_price=0.5,
+        )
+        await tmp_store.upsert_markets([market])
+        stored = await tmp_store.get_market_by_external_id("kalshi", "TERM-1")
+        assert stored is not None and stored.id is not None
+
+        adapter = FakeStreamingAdapter(markets=[], events=[])
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
+        await manager._build_ticker_cache()
+
+        # Simulate a terminal STATUS_CHANGE event
+        event = EventRecord(
+            market_id=stored.id,
+            event_type=EventType.STATUS_CHANGE,
+            new_value=0.0,
+            metadata=json.dumps({"ticker": "TERM-1", "status": "closed"}),
+            timestamp=1000000,
+        )
+        await manager._handle_status_change(event)
+
+        # Market should be deactivated
+        updated = await tmp_store.get_market_by_id(stored.id)
+        assert updated is not None
+        assert updated.is_active is False
+
+        # Ticker should be removed from cache
+        assert "TERM-1" not in manager._ticker_to_market_id
+
+    async def test_non_terminal_status_change_keeps_market_active(
+        self, tmp_store, sample_settings
+    ):
+        """STATUS_CHANGE with non-terminal status does NOT deactivate."""
+        market = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="NONTERM-1",
+            title="Non-Terminal Test",
+            yes_price=0.5,
+        )
+        await tmp_store.upsert_markets([market])
+        stored = await tmp_store.get_market_by_external_id("kalshi", "NONTERM-1")
+        assert stored is not None and stored.id is not None
+
+        adapter = FakeStreamingAdapter(markets=[], events=[])
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
+        await manager._build_ticker_cache()
+
+        # Non-terminal status (e.g. "active") should NOT deactivate
+        event = EventRecord(
+            market_id=stored.id,
+            event_type=EventType.STATUS_CHANGE,
+            new_value=0.0,
+            metadata=json.dumps({"ticker": "NONTERM-1", "status": "active"}),
+            timestamp=1000000,
+        )
+        await manager._handle_status_change(event)
+
+        updated = await tmp_store.get_market_by_id(stored.id)
+        assert updated is not None
+        assert updated.is_active is True
+
+        # Ticker should still be in cache
+        assert "NONTERM-1" in manager._ticker_to_market_id
+
+    async def test_handle_status_change_all_terminal_statuses(
+        self, tmp_store, sample_settings
+    ):
+        """All terminal statuses (closed, determined, finalized, settled) deactivate."""
+        for i, status in enumerate(["closed", "determined", "finalized", "settled"]):
+            ext_id = f"ALLTERM-{i}"
+            market = DiscoveredMarket(
+                platform=Platform.KALSHI,
+                external_id=ext_id,
+                title=f"Terminal {status}",
+                yes_price=0.5,
+            )
+            await tmp_store.upsert_markets([market])
+            stored = await tmp_store.get_market_by_external_id("kalshi", ext_id)
+            assert stored is not None and stored.id is not None
+
+            adapter = FakeStreamingAdapter(markets=[], events=[])
+            bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+            manager = IngestionManager([adapter], tmp_store, bus, sample_settings)
+            await manager._build_ticker_cache()
+
+            event = EventRecord(
+                market_id=stored.id,
+                event_type=EventType.STATUS_CHANGE,
+                new_value=0.0,
+                metadata=json.dumps({"ticker": ext_id, "status": status}),
+                timestamp=1000000,
+            )
+            await manager._handle_status_change(event)
+
+            updated = await tmp_store.get_market_by_id(stored.id)
+            assert updated is not None
+            assert updated.is_active is False, f"Status '{status}' should deactivate"

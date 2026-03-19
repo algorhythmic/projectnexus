@@ -183,3 +183,65 @@ class TestDiscoveryLoop:
         loop._running = True
         await loop.stop()
         assert loop._running is False
+
+
+class TestEndDateExpiry:
+    async def test_expired_markets_deactivated(self, tmp_store):
+        """run_once deactivates markets past their end_date."""
+        # Insert a market with an end_date in the past
+        expired = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="EXP-DISC-1",
+            title="Expired Market",
+            end_date="2020-01-01T00:00:00Z",
+            yes_price=0.50,
+        )
+        adapter = FakeAdapter([expired])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        await loop.run_once()
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "EXP-DISC-1")
+        assert stored is not None
+        assert stored.is_active is False
+
+    async def test_future_markets_stay_active(self, tmp_store):
+        """run_once keeps markets with future end_date active."""
+        future = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="FUT-DISC-1",
+            title="Future Market",
+            end_date="2030-12-31T23:59:59Z",
+            yes_price=0.60,
+        )
+        adapter = FakeAdapter([future])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        await loop.run_once()
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "FUT-DISC-1")
+        assert stored is not None
+        assert stored.is_active is True
+
+    async def test_null_end_date_stays_active(self, tmp_store):
+        """Markets without end_date are not affected by expiry check."""
+        no_end = DiscoveredMarket(
+            platform=Platform.KALSHI,
+            external_id="NOEND-1",
+            title="No End Date",
+            yes_price=0.40,
+        )
+        adapter = FakeAdapter([no_end])
+        loop = DiscoveryLoop(
+            adapters=[adapter], store=tmp_store, interval_seconds=0
+        )
+
+        await loop.run_once()
+
+        stored = await tmp_store.get_market_by_external_id("kalshi", "NOEND-1")
+        assert stored is not None
+        assert stored.is_active is True

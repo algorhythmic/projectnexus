@@ -14,13 +14,15 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set
 from nexus.adapters.base import BaseAdapter
 from nexus.core.config import Settings
 from nexus.core.logging import LoggerMixin
-from nexus.core.types import EventRecord
+from nexus.core.types import EventRecord, EventType
 from nexus.ingestion.bus import EventBus
 from nexus.ingestion.discovery import DiscoveryLoop
 from nexus.store.base import BaseStore
 
 if TYPE_CHECKING:
     from nexus.ingestion.metrics import MetricsCollector
+
+_TERMINAL_STATUSES = frozenset({"closed", "determined", "finalized", "settled"})
 
 
 class IngestionManager(LoggerMixin):
@@ -228,6 +230,8 @@ class IngestionManager(LoggerMixin):
                     resolved = self._resolve_event(event)
                     if resolved is not None:
                         await self._bus.put(resolved)
+                        if resolved.event_type == EventType.STATUS_CHANGE:
+                            await self._handle_status_change(resolved)
 
                     # Check if discovery found new tickers that need subscription
                     if self._resubscribe_needed.is_set():
@@ -300,3 +304,29 @@ class IngestionManager(LoggerMixin):
             return data.get("ticker")
         except (json.JSONDecodeError, TypeError):
             return None
+
+    async def _handle_status_change(self, event: EventRecord) -> None:
+        """Deactivate market if the status change is terminal."""
+        if not event.metadata:
+            return
+        try:
+            data = json.loads(event.metadata)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        status = data.get("status", "").lower()
+        if status not in _TERMINAL_STATUSES:
+            return
+
+        deactivated = await self._store.deactivate_market(event.market_id)
+        if deactivated:
+            # Remove from ticker cache to prevent resubscription
+            ticker = data.get("ticker")
+            if ticker and ticker in self._ticker_to_market_id:
+                del self._ticker_to_market_id[ticker]
+            self.logger.info(
+                "Market deactivated via WebSocket lifecycle",
+                market_id=event.market_id,
+                status=status,
+                ticker=ticker,
+            )
