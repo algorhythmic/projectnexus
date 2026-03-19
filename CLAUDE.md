@@ -8,7 +8,7 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 
 ## Current Status
 
-**223 tests passing** (+ 14 PostgreSQL integration tests that skip without `TEST_POSTGRES_DSN`)
+**226 tests passing** (+ 14 PostgreSQL integration tests that skip without `TEST_POSTGRES_DSN`)
 
 **Completed milestones:**
 - Phase 1: Kalshi REST adapter, WebSocket streaming, stability monitoring (Milestones 1.1–1.3)
@@ -24,11 +24,20 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Logarithmic severity scaling (was linear, all anomalies capped at 1.00)
 - Anomaly deduplication (skip markets with existing active anomalies)
 - Discovery filtered: exclude combo markets (`mve_filter`), near-expiry (`min_close_ts`)
-- Sync optimized: only markets with events synced to Convex (597 vs 90K+)
-- OOM fix: detection capped at 200 markets/cycle, init from 10min ago
+- Sync optimized: only markets with events synced to Convex (now 1000 vs 90K+)
+- OOM fix: detection capped at 200 markets/cycle (configurable), init from 10min ago
+- DB cleanup: stale markets purged, awaiting Supabase autovacuum
+- RSS memory monitoring: `rss_mb` in pipeline health logs (every 60s), `rss_before/after/delta_mb` in detection cycle logs
+- `nexus detect` enhanced with `--lookback` and `--cap` flags for instant local profiling
+- Kalshi adapter updated for Jan–Mar 2026 API field migration (`_dollars`/`_fp` suffixes)
+- Discovery first-cycle now emits `price_change` events (was silently seeding cache only)
+- First-seen markets emit both `new_market` + `price_change` events (view needs `price_change`)
+- Convex stale market cleanup: `cleanupStaleMarkets` mutation, throttled to every 5 min
+- Materialized view refresh bug fixed: `v_current_market_state` now refreshes every 5 min (was only on startup)
 
 **Next milestones:**
-- DB cleanup: purge stale markets to get Supabase under 500MB free tier
+- Verify OOM fixes hold during peak hours (check `rss_mb` in fly logs 9:30 AM–8 PM ET)
+- Verify MarketFinder UI shows real prices (post N/A fix, check after 9:30 AM ET when markets have active orders)
 - Run initial topic clustering (`nexus cluster`) to enable trending topics
 - Phase 5: LLM narrative layer
 
@@ -114,6 +123,8 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **Discovery filters:** `mve_filter=exclude` (skip combo markets), `min_close_ts` (skip near-expiry), 5 pages max (1000 markets/cycle)
 - **Data model:** Series → Events → Markets hierarchy. `series_ticker` groups recurring markets (e.g., daily BTC price markets)
 - **~3,500+ active non-combo markets**, defined trading hours (most active 9:30 AM–8 PM ET)
+- **Field naming (Jan–Mar 2026 migration):** Prices use `_dollars` suffix (FixedPointDollars strings, e.g. `"0.6500"`): `yes_ask_dollars`, `yes_bid_dollars`, `last_price_dollars`. Counts use `_fp` suffix (FixedPointCount strings, e.g. `"10.00"`): `volume_fp`, `open_interest_fp`, `count_fp`. Legacy fields (`yes_ask`, `yes_bid`, `last_price`, `volume`, `open_interest`, `count`, `category`) were removed. See `docs.kalshi.com/changelog`.
+- **Market statuses:** `initialized`, `inactive`, `active`, `closed`, `determined`, `disputed`, `amended`, `finalized` (no "open" status)
 
 ### Polymarket
 - **REST:** `https://gamma-api.polymarket.com`
@@ -153,7 +164,7 @@ Nexus and MarketFinder are **separate systems** connected only by a sync layer (
 
 - **GitHub repo:** `algorhythmic/projectnexus`
 - **Supabase:** PostgreSQL host (use direct connection port 5432, NOT PgBouncer 6543)
-- **Fly.io:** DEPLOYED and running (`shared-cpu-1x`, 1GB RAM, app `projectnexus`). OOM-prone at 730MB avg RSS — detection capped at 200 markets/cycle
+- **Fly.io:** DEPLOYED and running (`shared-cpu-1x`, 1GB RAM, app `projectnexus`). OOM-prone at 730MB avg RSS — detection capped at 200 markets/cycle. Deploy with `fly deploy`, deploy Convex with `npx convex dev --once` from `C:\Workspace\Code\marketfinder`.
 - **Convex (new):** `deafening-starling-749` — fresh dev cloud deployment for Nexus sync. Cloud URL: `https://deafening-starling-749.convex.cloud`. Deploy key set via `fly secrets set CONVEX_DEPLOY_KEY=...`.
 - **Convex (legacy):** `sensible-parakeet-564` — old MarketFinder deployment, schema drift from ETL repo overwriting via `npx convex dev`. Crons accumulated 461.9MB in `priceHistory`. Should be paused or deleted — no longer used by Nexus.
 - **Containerized auth:** Inline PEM key support via `KALSHI_PRIVATE_KEY_PEM` env var (for Fly.io deployment where key file isn't available)
