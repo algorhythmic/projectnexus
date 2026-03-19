@@ -114,7 +114,7 @@ export function MarketsView() {
           columns={columns}
           data={groupedData}
           onRowClick={handleRowClick}
-          tabletHiddenColumns={["lastPrice", "category", "syncedAt", "actions"]}
+          tabletHiddenColumns={["lastPrice", "category", "endDate", "syncedAt", "actions"]}
           renderCard={(market, isSelected, toggleSelected) => {
             const isGroup = (market._groupSize ?? 0) > 1;
             const isChild = market._isChild;

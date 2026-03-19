@@ -64,6 +64,7 @@ class SyncLayer(LoggerMixin):
                 "title": r["title"],
                 "eventTitle": r.get("description") or "",
                 "category": r.get("category") or "",
+                "endDate": r.get("end_date"),
                 "isActive": bool(r["is_active"]),
                 "lastPrice": r.get("last_price"),
                 "lastPriceTs": r.get("last_price_ts"),

@@ -231,6 +231,39 @@ export const columns: ColumnDef<MarketRow>[] = [
     cell: ({ row }) => <div className="text-gray-700 dark:text-gray-300">{row.getValue("category")}</div>,
   },
   {
+    accessorKey: "endDate",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="font-bold text-black dark:text-white hover:text-black dark:hover:text-black hover:bg-yellow-300 border-2 border-black shadow-[2px_2px_0px_0px_#000] hover:shadow-[4px_4px_0px_0px_#000]"
+      >
+        Resolves
+        <ArrowUpDown className="ml-2 h-4 w-4" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const endDate = row.getValue("endDate") as string | null | undefined;
+      if (!endDate) return <div className="text-gray-400 dark:text-gray-500">—</div>;
+      const date = new Date(endDate);
+      const now = new Date();
+      const diffMs = date.getTime() - now.getTime();
+      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      let label: string;
+      if (diffDays < 0) label = "Expired";
+      else if (diffDays === 0) label = "Today";
+      else if (diffDays === 1) label = "Tomorrow";
+      else if (diffDays < 7) label = `${diffDays}d`;
+      else if (diffDays < 365) label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      else label = date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      return (
+        <div className={`text-sm whitespace-nowrap ${diffDays <= 1 ? "font-bold text-orange-600 dark:text-orange-400" : "text-gray-700 dark:text-gray-300"}`}>
+          {label}
+        </div>
+      );
+    },
+  },
+  {
     accessorKey: "syncedAt",
     header: ({ column }) => {
       return (

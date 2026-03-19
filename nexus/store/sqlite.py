@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS markets (
     title TEXT NOT NULL,
     description TEXT,
     category TEXT,
+    end_date TEXT,
     is_active BOOLEAN NOT NULL DEFAULT 1,
     first_seen_at INTEGER NOT NULL,
     last_updated_at INTEGER NOT NULL,
@@ -184,14 +185,15 @@ class SQLiteStore(BaseStore, LoggerMixin):
                 await self.db.execute(
                     """INSERT INTO markets
                        (platform, external_id, title, description, category,
-                        is_active, first_seen_at, last_updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        end_date, is_active, first_seen_at, last_updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         m.platform.value,
                         m.external_id,
                         m.title,
                         m.description,
                         m.category,
+                        m.end_date,
                         m.is_active,
                         now_ms,
                         now_ms,
@@ -202,12 +204,13 @@ class SQLiteStore(BaseStore, LoggerMixin):
                 await self.db.execute(
                     """UPDATE markets
                        SET title = ?, description = ?, category = ?,
-                           is_active = ?, last_updated_at = ?
+                           end_date = ?, is_active = ?, last_updated_at = ?
                        WHERE platform = ? AND external_id = ?""",
                     (
                         m.title,
                         m.description,
                         m.category,
+                        m.end_date,
                         m.is_active,
                         now_ms,
                         m.platform.value,

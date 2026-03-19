@@ -12,6 +12,7 @@ const applicationTables = {
     title: v.string(),
     eventTitle: v.optional(v.string()),
     category: v.string(),
+    endDate: v.optional(v.union(v.string(), v.null())),
     isActive: v.boolean(),
     lastPrice: v.optional(v.union(v.number(), v.null())),
     lastPriceTs: v.optional(v.union(v.number(), v.null())),

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS markets (
     title TEXT NOT NULL,
     description TEXT,
     category TEXT,
+    end_date TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     first_seen_at BIGINT NOT NULL,
     last_updated_at BIGINT NOT NULL,
@@ -130,6 +131,7 @@ SELECT
     m.title,
     m.description,
     m.category,
+    m.end_date,
     m.is_active,
     latest_price.new_value AS last_price,
     latest_price.timestamp AS last_price_ts,
@@ -234,10 +236,18 @@ class PostgresStore(BaseStore, LoggerMixin):
         )
         async with self.pool.acquire() as conn:
             await conn.execute(_SCHEMA_SQL)
+            # Add columns that may not exist on older schemas
+            for col, typ in [("end_date", "TEXT")]:
+                try:
+                    await conn.execute(
+                        f"ALTER TABLE markets ADD COLUMN {col} {typ}"
+                    )
+                except asyncpg.DuplicateColumnError:
+                    pass
             # Recreate views if schema has changed (e.g. new columns)
             try:
                 await conn.fetchrow(
-                    "SELECT description FROM v_current_market_state LIMIT 0"
+                    "SELECT description, end_date FROM v_current_market_state LIMIT 0"
                 )
             except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
                 await conn.execute(
@@ -267,15 +277,16 @@ class PostgresStore(BaseStore, LoggerMixin):
         sql = """
             INSERT INTO markets
                 (platform, external_id, title, description, category,
-                 is_active, first_seen_at, last_updated_at)
+                 end_date, is_active, first_seen_at, last_updated_at)
             SELECT * FROM unnest(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                $6::bool[], $7::bigint[], $8::bigint[]
+                $6::text[], $7::bool[], $8::bigint[], $9::bigint[]
             )
             ON CONFLICT (platform, external_id) DO UPDATE SET
                 title = EXCLUDED.title,
                 description = EXCLUDED.description,
                 category = EXCLUDED.category,
+                end_date = EXCLUDED.end_date,
                 is_active = EXCLUDED.is_active,
                 last_updated_at = EXCLUDED.last_updated_at
             RETURNING
@@ -290,6 +301,7 @@ class PostgresStore(BaseStore, LoggerMixin):
                 titles = [m.title for m in batch]
                 descriptions = [m.description for m in batch]
                 categories = [m.category for m in batch]
+                end_dates = [m.end_date for m in batch]
                 actives = [m.is_active for m in batch]
                 first_seen = [now_ms] * len(batch)
                 last_updated = [now_ms] * len(batch)
@@ -297,7 +309,7 @@ class PostgresStore(BaseStore, LoggerMixin):
                 rows = await conn.fetch(
                     sql,
                     platforms, external_ids, titles, descriptions,
-                    categories, actives, first_seen, last_updated,
+                    categories, end_dates, actives, first_seen, last_updated,
                 )
                 new_count += sum(1 for r in rows if r[0] == 1)
 
