@@ -46,3 +46,12 @@ Thumbs.db
 # Reference repos (not part of nexus)
 marketfinder-main/
 marketfinder_ETL-main/
+
+# Node / Convex
+node_modules/
+webapp/node_modules/
+webapp/dist/
+
+# Convex local
+.env.local
+convex/_generated/

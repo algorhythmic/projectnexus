@@ -41,11 +41,11 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Run initial topic clustering (`nexus cluster`) to enable trending topics
 - Phase 5: LLM narrative layer
 
-## Repository Layout
+## Repository Layout (Monorepo)
 
 ```
-projectnexus/                   # Git root
-├── nexus/                      # Python package
+projectnexus/                   # Git root — monorepo
+├── nexus/                      # Python package (data pipeline)
 │   ├── core/                   # config.py, logging.py, types.py
 │   ├── adapters/               # auth.py, base.py, kalshi.py, polymarket.py
 │   ├── ingestion/              # discovery.py, bus.py
@@ -53,16 +53,25 @@ projectnexus/                   # Git root
 │   ├── correlation/            # detector, correlator, cross_platform
 │   ├── sync/                   # convex_client.py, sync.py
 │   └── cli.py
-├── sql/                        # schema.sql, migrations/, views/
+├── convex/                     # Convex backend (single source of truth)
+│   ├── schema.ts               # All tables: sync targets + webapp-owned
+│   ├── nexusSync.ts            # Mutations called by Python sync layer
+│   ├── queries.ts              # Read queries for React components
+│   └── auth.ts, users.ts, ... # Webapp-specific Convex functions
+├── webapp/                     # MarketFinder React frontend
+│   ├── src/                    # Components, hooks, pages
+│   ├── package.json            # React/Vite/UI deps
+│   └── vite.config.ts
+├── sql/                        # PG schema, migrations/
 ├── tests/                      # pytest suite
-├── Dockerfile                  # Fly.io deployment
+├── package.json                # Root — convex + @convex-dev/auth only
+├── Dockerfile                  # Python-only Fly.io image
 ├── fly.toml                    # Fly.io config
-├── projectnexus_specdoc.md     # Master specification
 ├── pyproject.toml              # Poetry config
 └── CLAUDE.md                   # This file
 ```
 
-The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored reference repos used during porting. They are NOT part of the Nexus codebase.
+The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored reference repos used during porting. The original MarketFinder repo (`github.com/algorhythmic/marketfinder`) has been merged into this monorepo under `webapp/`.
 
 ## Tech Stack
 
@@ -152,19 +161,20 @@ Defined in `sql/schema.sql` and inline in store implementations.
 - 4 materialized views: `v_current_market_state`, `v_active_anomalies`, `v_trending_topics`, `v_market_summaries`
 - Connection pooling via `asyncpg.create_pool()`
 
-## Relationship to MarketFinder
+## Relationship: Nexus ↔ MarketFinder (Monorepo)
 
-Nexus and MarketFinder are **separate systems** connected only by a sync layer (Phase 4). They share no runtime dependencies.
+This is a **monorepo** containing both the data pipeline (`nexus/`) and the webapp (`webapp/`). They share the Convex backend (`convex/`) as a single source of truth.
 
-- **MarketFinder** (`marketfinder-main/`): React + Convex webapp. Stays as-is. Becomes a presentation layer.
-- **MarketFinder ETL** (`marketfinder_ETL-main/`): Python ETL pipeline + duplicate Convex backend. **Deprecated.** Its useful code has been ported into Nexus. Its `convex/` directory was likely the last thing deployed to `sensible-parakeet-564`, causing schema drift with `marketfinder-main/`.
-- **Nexus** is the source of truth for all market data. Convex becomes a read-only sync target in Phase 4.
+- **Nexus** (`nexus/`): Python data pipeline. Source of truth for all market data. Syncs precomputed data to Convex.
+- **MarketFinder** (`webapp/`): React + Convex webapp. Read-only presentation layer. Reads from Convex tables populated by Nexus.
+- **Convex** (`convex/`): Shared backend. Schema, mutations, and queries live here — one copy, no duplication.
+- **MarketFinder ETL** (`marketfinder_ETL-main/`): **Deprecated.** Reference repo only (gitignored).
 
 ## Infrastructure
 
 - **GitHub repo:** `algorhythmic/projectnexus`
 - **Supabase:** PostgreSQL host (use direct connection port 5432, NOT PgBouncer 6543)
-- **Fly.io:** DEPLOYED and running (`shared-cpu-1x`, 1GB RAM, app `projectnexus`). OOM-prone at 730MB avg RSS — detection capped at 200 markets/cycle. Deploy with `fly deploy`, deploy Convex with `npx convex dev --once` from `C:\Workspace\Code\marketfinder`.
+- **Fly.io:** DEPLOYED and running (`shared-cpu-1x`, 1GB RAM, app `projectnexus`). OOM-prone at 730MB avg RSS — detection capped at 200 markets/cycle. Deploy with `fly deploy` from repo root.
 - **Convex (new):** `deafening-starling-749` — fresh dev cloud deployment for Nexus sync. Cloud URL: `https://deafening-starling-749.convex.cloud`. Deploy key set via `fly secrets set CONVEX_DEPLOY_KEY=...`.
 - **Convex (legacy):** `sensible-parakeet-564` — old MarketFinder deployment, schema drift from ETL repo overwriting via `npx convex dev`. Crons accumulated 461.9MB in `priceHistory`. Should be paused or deleted — no longer used by Nexus.
 - **Containerized auth:** Inline PEM key support via `KALSHI_PRIVATE_KEY_PEM` env var (for Fly.io deployment where key file isn't available)
@@ -181,21 +191,30 @@ Nexus and MarketFinder are **separate systems** connected only by a sync layer (
 ## Commands Reference
 
 ```bash
-# Install dependencies
+# ─── Python (from repo root) ───
 python -m poetry install
-
-# Run tests
 python -m poetry run pytest tests/ -v
-
-# CLI
 python -m poetry run nexus info          # Show config
-python -m poetry run nexus db-init       # Create SQLite tables
-python -m poetry run nexus db-stats      # Market/event counts
-python -m poetry run nexus discover      # One-shot discovery cycle
 python -m poetry run nexus run           # Start polling loop
-python -m poetry run nexus validate      # Run store integrity checks (Decision Gate status)
-python -m poetry run nexus db-migrate    # SQLite → PostgreSQL backfill
+python -m poetry run nexus discover      # One-shot discovery cycle
+python -m poetry run nexus detect        # One-shot detection cycle
+python -m poetry run nexus db-stats      # Market/event counts
 python -m poetry run nexus refresh-views # Refresh PostgreSQL materialized views
+
+# ─── Convex (from repo root) ───
+npm install                              # First time only
+npx convex dev --once                    # Deploy schema + functions
+npx convex dev                           # Watch mode for development
+
+# ─── Webapp (from webapp/) ───
+cd webapp && npm install                 # First time only
+npm run dev:frontend                     # Vite dev server
+npx vite build                           # Production build
+npx tsc --noEmit                         # Type check
+
+# ─── Deploy (always Convex first, then Fly.io) ───
+npx convex dev --once                    # 1. Deploy Convex schema + functions
+fly deploy                               # 2. Deploy Nexus to Fly.io
 ```
 
 ## Important Warnings

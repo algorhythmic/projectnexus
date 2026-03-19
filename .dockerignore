@@ -13,3 +13,10 @@ marketfinder-main/
 marketfinder_ETL-main/
 *.md
 !nexus/**
+
+# Webapp and Convex (not needed in Python image)
+webapp/
+convex/
+node_modules/
+package.json
+package-lock.json
