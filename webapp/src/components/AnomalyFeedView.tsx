@@ -1,14 +1,19 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Doc } from "../../../convex/_generated/dataModel";
 import { MarketDataTable } from "./marketdatatable";
 import { anomalyColumns } from "./anomalytablecolumns";
 import { AnomalyDetailDialog } from "./AnomalyDetailDialog";
-import { getSeverityStyle } from "./anomalytablecolumns";
+import { getSeverityStyle, getSeverityLabel, getAnomalyTypeInfo } from "./anomalytablecolumns";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Eye, X } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -18,11 +23,78 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
+type ActiveAnomaly = Doc<"activeAnomalies">;
+
+function parseMetadata(metadata: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(metadata);
+  } catch {
+    return null;
+  }
+}
+
+/** Inline detail popover content for a single anomaly. */
+function AnomalyPopoverContent({ anomaly }: { anomaly: ActiveAnomaly }) {
+  const info = getAnomalyTypeInfo(anomaly.anomalyType);
+  const Icon = info.icon;
+  const parsed = parseMetadata(anomaly.metadata);
+
+  return (
+    <div className="space-y-3 max-w-sm">
+      {/* Header: severity + type */}
+      <div className="flex items-center justify-between gap-2">
+        <span className={`px-2 py-1 rounded border-2 border-black text-xs font-bold shadow-[2px_2px_0px_0px_#000] ${getSeverityStyle(anomaly.severity)}`}>
+          {getSeverityLabel(anomaly.severity)} — {anomaly.severity.toFixed(2)}
+        </span>
+        <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-black text-xs font-bold bg-purple-300 text-purple-800 dark:bg-purple-700 dark:text-purple-200">
+          <Icon className="h-3 w-3" />
+          {info.label}
+        </span>
+      </div>
+
+      {/* Type description */}
+      <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+        {info.description}
+      </p>
+
+      {/* Summary */}
+      <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">
+        {anomaly.summary}
+      </p>
+
+      {/* Details grid */}
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <span className="font-bold text-gray-500 dark:text-gray-400 uppercase block">Markets</span>
+          <span className="font-bold text-gray-900 dark:text-white">{anomaly.marketCount}</span>
+        </div>
+        <div>
+          <span className="font-bold text-gray-500 dark:text-gray-400 uppercase block">Detected</span>
+          <span className="text-gray-700 dark:text-gray-300">
+            {new Date(anomaly.detectedAt).toLocaleString()}
+          </span>
+        </div>
+      </div>
+
+      {/* Metadata */}
+      {parsed && (
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-600">
+          <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase block mb-1">Details</span>
+          <pre className="text-xs bg-gray-100 dark:bg-gray-700 p-2 rounded border border-black overflow-x-auto max-h-28 dark:text-gray-300">
+            {JSON.stringify(parsed, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AnomalyFeedView() {
   const [minSeverity, setMinSeverity] = useState<number | undefined>(undefined);
   const [anomalyType, setAnomalyType] = useState<string | undefined>(undefined);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [selectedAnomalies, setSelectedAnomalies] = useState<Doc<"activeAnomalies">[]>([]);
+  const [selectedAnomalies, setSelectedAnomalies] = useState<ActiveAnomaly[]>([]);
+  const [activeAnomaly, setActiveAnomaly] = useState<ActiveAnomaly | null>(null);
 
   const anomalies = useQuery(api.queries.getActiveAnomalies, {
     minSeverity,
@@ -30,7 +102,11 @@ export function AnomalyFeedView() {
     limit: 100,
   });
 
-  const anomalyData: Doc<"activeAnomalies">[] = anomalies || [];
+  const anomalyData: ActiveAnomaly[] = anomalies || [];
+
+  const handleRowClick = useCallback((row: ActiveAnomaly) => {
+    setActiveAnomaly((prev) => (prev?._id === row._id ? null : row));
+  }, []);
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -82,6 +158,20 @@ export function AnomalyFeedView() {
         </div>
       </div>
 
+      {/* Active anomaly detail popover (shown when a row is clicked) */}
+      {activeAnomaly && (
+        <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_#000] rounded-lg p-4 dark:bg-gray-800 dark:border-black dark:shadow-[8px_8px_0px_0px_#000] relative">
+          <button
+            onClick={() => setActiveAnomaly(null)}
+            className="absolute top-3 right-3 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Close detail"
+          >
+            <X className="h-4 w-4 text-gray-500" />
+          </button>
+          <AnomalyPopoverContent anomaly={activeAnomaly} />
+        </div>
+      )}
+
       {/* Loading State */}
       {anomalies === undefined && (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
@@ -98,49 +188,63 @@ export function AnomalyFeedView() {
         <MarketDataTable
           columns={anomalyColumns}
           data={anomalyData}
-          tabletHiddenColumns={["clusterName", "summary", "detectedAt", "actions"]}
-          renderCard={(anomaly, isSelected, toggleSelected) => (
-            <div
-              className={`border-2 border-black rounded-lg p-4 shadow-[4px_4px_0px_0px_#000] transition-colors ${
-                isSelected
-                  ? "bg-yellow-100 dark:bg-yellow-900/30"
-                  : "bg-white dark:bg-gray-700"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <Checkbox
-                  checked={isSelected}
-                  onCheckedChange={toggleSelected}
-                  aria-label="Select anomaly"
-                  className="border-black shadow-[2px_2px_0px_0px_#000] mt-0.5"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <p className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2">
-                      {anomaly.clusterName}
+          onRowClick={handleRowClick}
+          tabletHiddenColumns={["summary", "detectedAt"]}
+          renderCard={(anomaly, isSelected, toggleSelected) => {
+            const info = getAnomalyTypeInfo(anomaly.anomalyType);
+            const Icon = info.icon;
+            const isActive = activeAnomaly?._id === anomaly._id;
+
+            return (
+              <div
+                className={`border-2 border-black rounded-lg p-4 shadow-[4px_4px_0px_0px_#000] transition-colors cursor-pointer ${
+                  isActive
+                    ? "ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/30"
+                    : isSelected
+                    ? "bg-yellow-100 dark:bg-yellow-900/30"
+                    : "bg-white dark:bg-gray-700"
+                }`}
+                onClick={() => handleRowClick(anomaly)}
+              >
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={toggleSelected}
+                    aria-label="Select anomaly"
+                    className="border-black shadow-[2px_2px_0px_0px_#000] mt-0.5"
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  />
+                  <div className="flex-1 min-w-0">
+                    {/* Top row: type badge + severity */}
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-black text-xs font-bold bg-purple-300 text-purple-800 dark:bg-purple-700 dark:text-purple-200">
+                        <Icon className="h-3 w-3" />
+                        {info.label}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded border-2 border-black text-xs font-bold flex-shrink-0 shadow-[2px_2px_0px_0px_#000] ${getSeverityStyle(anomaly.severity)}`}>
+                        {getSeverityLabel(anomaly.severity)} {anomaly.severity.toFixed(2)}
+                      </span>
+                    </div>
+
+                    {/* Summary */}
+                    <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2 mb-2">
+                      {anomaly.summary}
                     </p>
-                    <span className={`px-2 py-0.5 rounded border-2 border-black text-xs font-bold flex-shrink-0 shadow-[2px_2px_0px_0px_#000] ${getSeverityStyle(anomaly.severity)}`}>
-                      {anomaly.severity.toFixed(2)}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2 mb-2">
-                    {anomaly.summary}
-                  </p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 rounded border border-black text-xs font-bold uppercase bg-purple-300 text-purple-800 dark:bg-purple-700 dark:text-purple-200">
-                      {anomaly.anomalyType.replace(/_/g, " ")}
-                    </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {anomaly.marketCount} market{anomaly.marketCount !== 1 ? "s" : ""}
-                    </span>
-                    <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
-                      {new Date(anomaly.detectedAt).toLocaleDateString()}
-                    </span>
+
+                    {/* Bottom row: timestamp */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500 dark:text-gray-400 italic">
+                        {info.description}
+                      </span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto whitespace-nowrap">
+                        {new Date(anomaly.detectedAt).toLocaleDateString()}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          }}
           renderSelectionToolbar={(selectedRows, clearSelection) => (
             <div className="flex items-center justify-between bg-yellow-300 border-2 border-black rounded-lg px-4 py-3 shadow-[4px_4px_0px_0px_#000]">
               <div className="flex items-center gap-3">
