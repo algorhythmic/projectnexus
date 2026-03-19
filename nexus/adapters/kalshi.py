@@ -42,6 +42,9 @@ _CATEGORY_MAP: Dict[str, str] = {
     "technology": "Technology",
     "tech": "Technology",
     "science": "Science",
+    "science and technology": "Science",
+    "science & technology": "Science",
+    "health": "Science",
     "business": "Business",
     "financial": "Economics",
     "finance": "Economics",
@@ -77,6 +80,13 @@ def _categorize_from_title(title: str) -> str:
                              "actor", "actress", "bond", "hollywood", "box office", "disney",
                              "marvel", "tv show", "streaming", "perform", "role")):
         return "Entertainment"
+    if any(w in t for w in ("fda", "drug", "vaccine", "cure", "diabetes", "cancer",
+                             "disease", "pandemic", "virus", "clinical trial",
+                             "medical", "pharmaceutical", "treatment", "health",
+                             "ai ", "artificial intelligence", "space", "nasa", "launch",
+                             "quantum", "fusion", "nuclear", "erupt", "volcano",
+                             "earthquake", "asteroid", "extinction")):
+        return "Science"
     if any(w in t for w in ("stock", "company", "ipo", "earnings", "s&p", "nasdaq", "dow")):
         return "Business"
     return "Other"
