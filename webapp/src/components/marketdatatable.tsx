@@ -176,14 +176,20 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
         </div>
       ) : (
         /* ─── Table Layout (Tablet + Desktop) ─── */
-        <div className="rounded-md border-2 border-black overflow-x-auto dark:border-black">
+        <div className="rounded-md border-2 border-black dark:border-black">
           <Table>
             <TableHeader className="bg-gray-200 dark:bg-gray-700">
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="border-b-2 border-black dark:border-black">
                   {headerGroup.headers.map((header) => {
+                    const isSticky = header.column.id === "actions";
                     return (
-                      <TableHead key={header.id} className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider dark:text-gray-300 border-r-2 border-black last:border-r-0 dark:border-black">
+                      <TableHead
+                        key={header.id}
+                        className={`px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider dark:text-gray-300 border-r-2 border-black last:border-r-0 dark:border-black ${
+                          isSticky ? "sticky right-0 z-20 bg-gray-200 dark:bg-gray-700" : ""
+                        }`}
+                      >
                         {header.isPlaceholder
                           ? null
                           : flexRender(
@@ -213,14 +219,22 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
                     }`}
                     onClick={() => onRowClick?.(row.original)}
                   >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="px-4 py-3 border-r border-gray-200 last:border-r-0 dark:border-gray-600">
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </TableCell>
-                    ))}
+                    {row.getVisibleCells().map((cell) => {
+                      const isSticky = cell.column.id === "actions";
+                      return (
+                        <TableCell
+                          key={cell.id}
+                          className={`px-4 py-3 border-r border-gray-200 last:border-r-0 dark:border-gray-600 ${
+                            isSticky ? "sticky right-0 z-10 bg-white dark:bg-gray-800 group-hover:bg-yellow-200 dark:group-hover:bg-yellow-500/30 border-l-2 border-l-gray-300 dark:border-l-gray-600" : ""
+                          }`}
+                        >
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext()
+                          )}
+                        </TableCell>
+                      );
+                    })}
                   </TableRow>
                 ))
               ) : (
