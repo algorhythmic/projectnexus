@@ -75,6 +75,7 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 
 ## Tech Stack
 
+### Nexus (Python data pipeline)
 - **Python 3.11+** (currently running 3.13 on this machine)
 - **Poetry** for dependency management (`python -m poetry` — not on PATH directly)
 - **aiosqlite** for async SQLite (Phase 1 store)
@@ -86,6 +87,14 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **structlog** for structured JSON logging
 - **typer** + **rich** for CLI
 - **pytest** + **pytest-asyncio** for testing
+
+### MarketFinder (React webapp — `webapp/`)
+- **React 18.2.0** with **Vite 6.2.0**
+- **Convex ^1.24.2** for reactive backend (queries, mutations, auth)
+- **@convex-dev/auth ^0.0.80** with Password + Anonymous providers
+- **TanStack React Table 8.21.3** for data tables
+- **Tailwind CSS** with neobrutalist design system
+- **lucide-react** for icons, **Radix UI** primitives, **shadcn/ui** component library
 
 ## Code Conventions
 
@@ -119,6 +128,32 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - Tests do NOT hit real APIs — use FakeAdapter/FakeStreamingAdapter pattern and temp databases
 - Bus tests need a real market in DB (FK constraint) — use `_insert_market()` helper
 - PostgreSQL integration tests use `@pytest.mark.postgres` marker
+
+### Webapp Conventions (`webapp/`)
+
+**Routing:** State-based via `Dashboard.tsx`. The `activeView` string determines which component renders. Views: `dashboard`, `markets`, `topics`, `anomalies`, `alerts`, `settings`. No React Router.
+
+**Data fetching:** All data comes from Convex reactive queries (`useQuery`). Results may be `undefined` while loading — always handle loading states.
+
+**Design system (Neobrutalist):** Borders: `border-4 border-black`. Shadows: `shadow-[8px_8px_0px_0px_#000]`. Bold fills: `bg-yellow-300`, `bg-green-300`, `bg-red-300`, `bg-blue-300`. Dark mode: `dark:` Tailwind modifier throughout.
+
+**Severity color scale:** High (>=0.7): `bg-red-300`/`bg-red-700`. Medium (>=0.4): `bg-yellow-300`/`bg-yellow-600`. Low (<0.4): `bg-blue-300`/`bg-blue-700`.
+
+**Auth:** `@convex-dev/auth` with Password + Anonymous providers. `getAuthUserId(ctx)` server-side. Auth tables managed by the library — don't modify directly.
+
+**Playwright:** `npx playwright screenshot http://localhost:5173 screenshot.png` for visual verification. Use `--wait-for-timeout=3000` for async data.
+
+### Convex Schema (`convex/schema.ts`)
+
+**Sync tables (populated by Nexus, read-only for webapp):**
+- `nexusMarkets` — market data with price/volume, indexed by platform/active/search
+- `activeAnomalies` — detected anomalies with severity/type
+- `trendingTopics` — topic clusters ranked by anomaly activity
+- `marketSummaries` — aggregated market event statistics
+
+**App-owned tables:**
+- `users` — preferences (categories, platforms, notification toggles)
+- `alerts` — user notifications (anomaly, price_change, new_market types)
 
 ## Key API Details
 
@@ -219,7 +254,11 @@ fly deploy                               # 2. Deploy Nexus to Fly.io
 
 ## Important Warnings
 
-- **Never commit `.env` files** — they contain API keys. Use `.env.example` as a template.
+- **Never commit `.env` or `.env.local` files** — they contain API keys and deployment targets.
 - **Default to demo mode** (`KALSHI_USE_DEMO=true`) to avoid hitting production rate limits during development.
-- **Don't add heavy dependencies** without checking the spec. Nexus is deliberately lean in Phase 1. Dependencies like polars, scikit-learn, airflow, and kafka are Phase 2+ concerns.
-- **Don't break existing implementations.** Phases 1–3 are complete — polymarket.py, postgres.py, bus.py, correlation/, and sync/ are all implemented. Understand existing code before modifying.
+- **Don't add heavy dependencies** without checking the spec. Nexus is deliberately lean in Phase 1.
+- **Don't break existing implementations.** Phases 1–3 are complete — understand existing code before modifying.
+- **Deploy Convex before Fly.io** — if Python sends a field Convex doesn't expect, it throws `ConvexError`.
+- **Don't write to sync tables** from the webapp — `nexusMarkets`, `activeAnomalies`, `trendingTopics`, `marketSummaries` are Nexus-owned. Only `users` and `alerts` are app-owned.
+- **Don't add cron jobs** to `convex/crons.ts` — all data ingestion happens in Nexus on Fly.io.
+- **Auth tables** (`authSessions`, `authAccounts`, etc.) are managed by `@convex-dev/auth` — don't modify them directly.
