@@ -42,7 +42,9 @@ class DetectionLoop(LoggerMixin):
         self._retention_days = retention_days
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._last_cycle_ts: int = 0
+        # Start from 10 minutes ago (not 0) to avoid scanning all
+        # historical markets on first cycle — prevents OOM on restart
+        self._last_cycle_ts: int = int(time.time() * 1000) - 600_000
 
     async def run_once(self) -> int:
         """Run a single detection cycle. Returns anomaly count."""
@@ -59,6 +61,17 @@ class DetectionLoop(LoggerMixin):
             self._last_cycle_ts
         )
         self._last_cycle_ts = now_ms
+
+        # Cap to prevent OOM on the 1GB Fly.io VM — each market requires
+        # multiple DB round-trips for window computation + baseline sampling
+        max_markets = 200
+        if len(market_ids) > max_markets:
+            self.logger.info(
+                "detection_cap",
+                total=len(market_ids),
+                scanning=max_markets,
+            )
+            market_ids = market_ids[:max_markets]
 
         if not market_ids:
             # Log trading hours context for Kalshi (most active 9:30 AM–8 PM ET)
