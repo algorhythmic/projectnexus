@@ -54,4 +54,3 @@ webapp/dist/
 
 # Convex local
 .env.local
-convex/_generated/
