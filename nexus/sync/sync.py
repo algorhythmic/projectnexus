@@ -62,6 +62,7 @@ class SyncLayer(LoggerMixin):
                 "platform": r["platform"],
                 "externalId": r["external_id"],
                 "title": r["title"],
+                "eventTitle": r.get("description") or "",
                 "category": r.get("category") or "",
                 "isActive": bool(r["is_active"]),
                 "lastPrice": r.get("last_price"),

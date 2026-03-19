@@ -23,6 +23,7 @@ export const upsertMarkets = internalMutation({
         platform: v.string(),
         externalId: v.string(),
         title: v.string(),
+        eventTitle: v.optional(v.string()),
         category: v.string(),
         isActive: v.boolean(),
         lastPrice: v.optional(v.union(v.number(), v.null())),

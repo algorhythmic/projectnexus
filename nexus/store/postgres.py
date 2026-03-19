@@ -128,6 +128,7 @@ SELECT
     m.platform,
     m.external_id,
     m.title,
+    m.description,
     m.category,
     m.is_active,
     latest_price.new_value AS last_price,
@@ -233,6 +234,15 @@ class PostgresStore(BaseStore, LoggerMixin):
         )
         async with self.pool.acquire() as conn:
             await conn.execute(_SCHEMA_SQL)
+            # Recreate views if schema has changed (e.g. new columns)
+            try:
+                await conn.fetchrow(
+                    "SELECT description FROM v_current_market_state LIMIT 0"
+                )
+            except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
+                await conn.execute(
+                    "DROP MATERIALIZED VIEW IF EXISTS v_current_market_state CASCADE"
+                )
             # Materialized views — create only if they don't exist
             try:
                 await conn.execute(_VIEWS_SQL)

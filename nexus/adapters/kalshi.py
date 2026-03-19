@@ -24,22 +24,31 @@ from nexus.adapters.base import BaseAdapter
 from nexus.core.config import Settings
 from nexus.core.types import DiscoveredMarket, EventRecord, EventType, Platform
 
-# Mapping of Kalshi categories to standardized names
+# Mapping of Kalshi event categories (and legacy market categories)
+# to standardized display names.  Keys are lowercased for case-insensitive lookup.
 _CATEGORY_MAP: Dict[str, str] = {
-    "Economics": "Economics",
-    "Politics": "Politics",
-    "Elections": "Politics",
-    "Weather": "Weather",
-    "Sports": "Sports",
-    "Entertainment": "Entertainment",
-    "Technology": "Technology",
-    "Science": "Science",
-    "Business": "Business",
-    "Crypto": "Cryptocurrency",
-    "Cryptocurrency": "Cryptocurrency",
-    "Climate": "Weather",
-    "Financial": "Economics",
-    "Culture": "Entertainment",
+    "economics": "Economics",
+    "politics": "Politics",
+    "elections": "Politics",
+    "weather": "Weather",
+    "climate": "Weather",
+    "climate and weather": "Weather",
+    "sports": "Sports",
+    "entertainment": "Entertainment",
+    "entertainment - movies": "Entertainment",
+    "entertainment - music": "Entertainment",
+    "entertainment - tv": "Entertainment",
+    "culture": "Culture",
+    "technology": "Technology",
+    "tech": "Technology",
+    "science": "Science",
+    "business": "Business",
+    "financial": "Economics",
+    "finance": "Economics",
+    "crypto": "Cryptocurrency",
+    "cryptocurrency": "Cryptocurrency",
+    "mentions": "Social Media",
+    "news": "News",
 }
 
 
@@ -64,7 +73,9 @@ def _categorize_from_title(title: str) -> str:
     if any(w in t for w in ("temperature", "weather", "hurricane", "rain", "tornado",
                              "snowfall", "climate")):
         return "Weather"
-    if any(w in t for w in ("movie", "oscar", "emmy", "celebrity", "grammy", "netflix")):
+    if any(w in t for w in ("movie", "film", "oscar", "emmy", "celebrity", "grammy", "netflix",
+                             "actor", "actress", "bond", "hollywood", "box office", "disney",
+                             "marvel", "tv show", "streaming", "perform", "role")):
         return "Entertainment"
     if any(w in t for w in ("stock", "company", "ipo", "earnings", "s&p", "nasdaq", "dow")):
         return "Business"
@@ -74,8 +85,7 @@ def _categorize_from_title(title: str) -> str:
 def _standardize_category(raw: Optional[str], title: str) -> str:
     """Map a Kalshi category string to a standardized name."""
     if raw:
-        clean = raw.strip().title()
-        mapped = _CATEGORY_MAP.get(clean)
+        mapped = _CATEGORY_MAP.get(raw.strip().lower())
         if mapped:
             return mapped
     return _categorize_from_title(title)
@@ -151,6 +161,10 @@ class KalshiAdapter(BaseAdapter):
                     error=str(exc),
                 )
 
+        # Cache: event_ticker → data (persists across discovery cycles)
+        self._event_category_cache: Dict[str, str] = {}
+        self._event_title_cache: Dict[str, str] = {}
+
     # ------------------------------------------------------------------
     # Auth header override
     # ------------------------------------------------------------------
@@ -186,6 +200,8 @@ class KalshiAdapter(BaseAdapter):
           very long titles like "yes A,yes B,yes C" and rarely trade)
         """
         all_markets: List[DiscoveredMarket] = []
+        # Map external_id → event_ticker for category enrichment
+        raw_event_tickers: Dict[str, str] = {}
         cursor: Optional[str] = None
         max_pages = self._settings.kalshi_discovery_max_pages
         page = 0
@@ -214,6 +230,9 @@ class KalshiAdapter(BaseAdapter):
                 market = self._normalize(raw)
                 if market is not None:
                     all_markets.append(market)
+                    et = raw.get("event_ticker")
+                    if et:
+                        raw_event_tickers[market.external_id] = et
 
             cursor = data.get("cursor")
             if not cursor:
@@ -229,7 +248,60 @@ class KalshiAdapter(BaseAdapter):
         self.logger.info(
             "Kalshi discovery complete", markets_found=len(all_markets)
         )
+
+        # Enrich categories from the events API
+        await self._enrich_categories(all_markets, raw_event_tickers)
         return all_markets
+
+    async def _enrich_categories(
+        self,
+        markets: List[DiscoveredMarket],
+        event_tickers: Dict[str, str],
+    ) -> None:
+        """Fetch categories from the events API for any uncached event_tickers.
+
+        Args:
+            markets: discovered markets to update in-place.
+            event_tickers: map of external_id → event_ticker from raw API data.
+        """
+        # Collect event_tickers that aren't cached yet
+        needed = set()
+        for et in event_tickers.values():
+            if et and et not in self._event_category_cache:
+                needed.add(et)
+
+        # Fetch missing event data (category + title)
+        if needed:
+            self.logger.info(
+                "Fetching event metadata",
+                uncached=len(needed),
+                cached=len(self._event_category_cache),
+            )
+        for et in needed:
+            try:
+                data = await self.make_request("GET", f"events/{et}")
+                event = data.get("event", {})
+                self._event_category_cache[et] = event.get("category", "")
+                self._event_title_cache[et] = event.get("title", "")
+            except Exception:
+                # Non-fatal — fall back to title heuristic
+                self._event_category_cache[et] = ""
+                self._event_title_cache[et] = ""
+
+        # Apply cached event data to markets
+        enriched = 0
+        for m in markets:
+            et = event_tickers.get(m.external_id, "")
+            raw_cat = self._event_category_cache.get(et, "")
+            if raw_cat:
+                m.category = _standardize_category(raw_cat, m.title)
+                enriched += 1
+            # Store event title in description for group display
+            event_title = self._event_title_cache.get(et, "")
+            if event_title:
+                m.description = event_title
+        if enriched:
+            self.logger.info("Events enriched", count=enriched)
 
     # ------------------------------------------------------------------
     # connect() — WebSocket streaming
