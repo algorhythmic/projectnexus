@@ -567,6 +567,18 @@ class SQLiteStore(BaseStore, LoggerMixin):
         )
         await self.db.commit()
 
+    async def get_markets_with_active_anomalies(self) -> set[int]:
+        """Get IDs of all markets that have at least one active anomaly."""
+        cursor = await self.db.execute(
+            """SELECT DISTINCT am.market_id
+               FROM anomaly_markets am
+               JOIN anomalies a ON a.id = am.anomaly_id
+               WHERE a.status = ?""",
+            (AnomalyStatus.ACTIVE.value,),
+        )
+        rows = await cursor.fetchall()
+        return {row[0] for row in rows}
+
     async def expire_old_anomalies(self, older_than: int) -> int:
         cursor = await self.db.execute(
             """UPDATE anomalies SET status = ?

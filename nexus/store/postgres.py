@@ -693,6 +693,18 @@ class PostgresStore(BaseStore, LoggerMixin):
                 anomaly_id,
             )
 
+    async def get_markets_with_active_anomalies(self) -> set[int]:
+        """Get IDs of all markets that have at least one active anomaly."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT DISTINCT am.market_id
+                   FROM anomaly_markets am
+                   JOIN anomalies a ON a.id = am.anomaly_id
+                   WHERE a.status = $1""",
+                AnomalyStatus.ACTIVE.value,
+            )
+        return {row[0] for row in rows}
+
     async def expire_old_anomalies(self, older_than: int) -> int:
         async with self.pool.acquire() as conn:
             result = await conn.execute(

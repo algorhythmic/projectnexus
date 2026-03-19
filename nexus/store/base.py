@@ -187,6 +187,11 @@ class BaseStore(ABC):
         ...
 
     @abstractmethod
+    async def get_markets_with_active_anomalies(self) -> set[int]:
+        """Get IDs of all markets that have at least one active anomaly."""
+        ...
+
+    @abstractmethod
     async def expire_old_anomalies(self, older_than: int) -> int:
         """Bulk-expire active anomalies detected before older_than (Unix ms).
         Returns count of expired anomalies."""

@@ -137,19 +137,8 @@ class AnomalyDetector(LoggerMixin):
         Deduplicates: only stores the highest-severity anomaly per market
         (across all windows) to avoid flooding with repeated alerts.
         """
-        from nexus.core.types import AnomalyStatus
-
-        # Check which markets already have active anomalies — skip those
-        existing = await self._store.get_anomalies(
-            status=AnomalyStatus.ACTIVE,
-            anomaly_type="single_market",
-        )
-        existing_market_ids: set[int] = set()
-        for a in existing:
-            if a.id is not None:
-                links = await self._store.get_anomaly_markets(a.id)
-                for link in links:
-                    existing_market_ids.add(link.market_id)
+        # Single query to find markets with existing active anomalies
+        existing_market_ids = await self._store.get_markets_with_active_anomalies()
 
         count = 0
         for mid in market_ids:
