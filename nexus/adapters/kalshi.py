@@ -59,7 +59,8 @@ def _categorize_from_title(title: str) -> str:
     """Categorize a market based on title keywords."""
     t = title.lower()
     if any(w in t for w in ("election", "president", "congress", "senate", "vote", "poll",
-                             "trump", "biden", "governor", "mayor", "democrat", "republican")):
+                             "trump", "biden", "governor", "mayor", "democrat", "republican",
+                             "pope", "cardinal", "conclave", "vatican", "papacy")):
         return "Politics"
     if any(w in t for w in ("bitcoin", "crypto", "ethereum", "btc", "eth", "solana")):
         return "Cryptocurrency"
@@ -306,10 +307,21 @@ class KalshiAdapter(BaseAdapter):
             if raw_cat:
                 m.category = _standardize_category(raw_cat, m.title)
                 enriched += 1
-            # Store event title in description for group display
+            # Store event title in description for group display,
+            # but preserve the market subtitle as the title when the
+            # market title matches the event title (multi-outcome markets
+            # where each outcome has a unique subtitle but shares the
+            # event question as its title).
             event_title = self._event_title_cache.get(et, "")
             if event_title:
+                original_subtitle = m.description
                 m.description = event_title
+                if (
+                    original_subtitle
+                    and original_subtitle != event_title
+                    and m.title == event_title
+                ):
+                    m.title = original_subtitle
         if enriched:
             self.logger.info("Events enriched", count=enriched)
 
