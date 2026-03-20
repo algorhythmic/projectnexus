@@ -258,7 +258,10 @@ class SyncLayer(LoggerMixin):
                 if now - last_topics >= self._topics_interval:
                     if hasattr(self._store, "refresh_view"):
                         await self._store.refresh_view("v_trending_topics")
-                        await self._store.refresh_view("v_hourly_activity")
+                        try:
+                            await self._store.refresh_view("v_hourly_activity")
+                        except Exception:
+                            pass  # View may not exist on older schema deployments
                     await self.sync_trending_topics()
                     last_topics = now
 

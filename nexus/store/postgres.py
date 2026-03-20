@@ -907,14 +907,17 @@ class PostgresStore(BaseStore, LoggerMixin):
         return int(result.split()[-1]) > 0
 
     async def deactivate_expired_markets(self, now_iso: str) -> int:
+        from datetime import datetime
+
+        now_dt = datetime.fromisoformat(now_iso)
         sql = """
             UPDATE markets SET is_active = FALSE
             WHERE is_active = TRUE
               AND end_date IS NOT NULL AND end_date != ''
-              AND end_date::timestamptz <= $1::timestamptz
+              AND end_date::timestamptz <= $1
         """
         async with self.pool.acquire() as conn:
-            result = await conn.execute(sql, now_iso)
+            result = await conn.execute(sql, now_dt)
         return int(result.split()[-1])
 
     # ------------------------------------------------------------------
