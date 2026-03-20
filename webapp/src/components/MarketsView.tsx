@@ -1,4 +1,4 @@
-import { useQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useState, useMemo, useCallback } from "react";
 import { Doc } from "../../../convex/_generated/dataModel";
@@ -28,13 +28,16 @@ export function MarketsView() {
 
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  const markets = useQuery(api.queries.getMarkets, {
-    platform: selectedPlatform,
-    searchTerm: debouncedSearchTerm || undefined,
-    count: 4000,
-  });
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.queries.getMarketsPaginated,
+    {
+      platform: selectedPlatform,
+      searchTerm: debouncedSearchTerm || undefined,
+    },
+    { initialNumItems: 100 },
+  );
 
-  const marketData: Doc<"nexusMarkets">[] = markets || [];
+  const marketData: Doc<"nexusMarkets">[] = results;
 
   // Group multi-outcome markets by event ticker prefix
   const groupedData = useMemo(
@@ -98,7 +101,7 @@ export function MarketsView() {
       </div>
 
       {/* Loading State */}
-      {markets === undefined && (
+      {status === "LoadingFirstPage" && (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-white"></div>
           <div className="text-center">
@@ -109,11 +112,13 @@ export function MarketsView() {
       )}
 
       {/* Market Data Table */}
-      {markets !== undefined && marketData.length > 0 && (
+      {status !== "LoadingFirstPage" && marketData.length > 0 && (
         <MarketDataTable
           columns={columns}
           data={groupedData}
           onRowClick={handleRowClick}
+          onLoadMore={status === "CanLoadMore" ? () => loadMore(100) : undefined}
+          loadMoreStatus={status}
           tabletHiddenColumns={["lastPrice", "category", "endDate", "syncedAt", "actions"]}
           renderCard={(market, isSelected, toggleSelected) => {
             const isGroup = (market._groupSize ?? 0) > 1;
@@ -296,7 +301,7 @@ export function MarketsView() {
       )}
 
       {/* No Results State */}
-      {markets !== undefined && marketData.length === 0 && (
+      {status !== "LoadingFirstPage" && marketData.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
           <div className="text-center">
             <h3 className="text-lg font-semibold dark:text-white">No Markets Found</h3>

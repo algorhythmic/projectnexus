@@ -37,6 +37,8 @@ interface DataTableProps<TData, TValue> {
   renderSelectionToolbar?: (selectedRows: TData[], clearSelection: () => void) => React.ReactNode
   renderCard?: (item: TData, isSelected: boolean, toggleSelected: (value: boolean) => void) => React.ReactNode
   tabletHiddenColumns?: string[]
+  onLoadMore?: () => void
+  loadMoreStatus?: string
 }
 
 export function MarketDataTable<TData extends { _id: string }, TValue>({
@@ -49,6 +51,8 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
   renderSelectionToolbar,
   renderCard,
   tabletHiddenColumns,
+  onLoadMore,
+  loadMoreStatus,
 }: DataTableProps<TData, TValue>) {
   const layoutMode = useResponsiveLayout()
   const [sorting, setSorting] = React.useState<SortingState>([])
@@ -253,29 +257,46 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
       )}
 
       {/* ─── Pagination Footer ─── */}
-      <div className="flex items-center justify-end space-x-2 py-4 px-2">
-        <div className="flex-1 text-sm text-muted-foreground font-medium text-gray-600 dark:text-gray-400">
+      <div className="flex items-center justify-between py-4 px-2">
+        <div className="text-sm text-muted-foreground font-medium text-gray-600 dark:text-gray-400">
           {table.getFilteredSelectedRowModel().rows.length} of{" "}
           {table.getFilteredRowModel().rows.length} selected.
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => table.previousPage()}
-          disabled={!table.getCanPreviousPage()}
-          className={buttonStyles}
-        >
-          Previous
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => table.nextPage()}
-          disabled={!table.getCanNextPage()}
-          className={buttonStyles}
-        >
-          Next
-        </Button>
+        <div className="flex items-center space-x-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+            className={buttonStyles}
+          >
+            Previous
+          </Button>
+          {onLoadMore && loadMoreStatus === "CanLoadMore" && !table.getCanNextPage() && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onLoadMore}
+              className={buttonStyles}
+            >
+              Load More
+            </Button>
+          )}
+          {loadMoreStatus === "LoadingMore" && (
+            <span className="text-sm font-medium text-gray-500 dark:text-gray-400 px-3">
+              Loading...
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+            className={buttonStyles}
+          >
+            Next
+          </Button>
+        </div>
       </div>
     </div>
   )

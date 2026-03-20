@@ -1,4 +1,5 @@
 import { query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 
 export const getMarkets = query({
@@ -36,6 +37,43 @@ export const getMarkets = query({
       .query("nexusMarkets")
       .withIndex("by_active", (q) => q.eq("isActive", true))
       .take(limit);
+  },
+});
+
+export const getMarketsPaginated = query({
+  args: {
+    platform: v.optional(v.string()),
+    searchTerm: v.optional(v.string()),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    if (args.searchTerm) {
+      return await ctx.db
+        .query("nexusMarkets")
+        .withSearchIndex("search_nexus_markets", (q) => {
+          let sq = q.search("title", args.searchTerm!);
+          if (args.platform) {
+            sq = sq.eq("platform", args.platform);
+          }
+          sq = sq.eq("isActive", true);
+          return sq;
+        })
+        .paginate(args.paginationOpts);
+    }
+
+    if (args.platform) {
+      return await ctx.db
+        .query("nexusMarkets")
+        .withIndex("by_platform", (q) => q.eq("platform", args.platform!))
+        .order("desc")
+        .paginate(args.paginationOpts);
+    }
+
+    return await ctx.db
+      .query("nexusMarkets")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .order("desc")
+      .paginate(args.paginationOpts);
   },
 });
 
