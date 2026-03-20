@@ -56,9 +56,12 @@ export function groupMarkets(
       const isExpanded = expandedKeys.has(key);
       // Use event title from any member (all share the same event)
       const groupTitle = members.find((m) => m.eventTitle)?.eventTitle || "";
-      // Parent row uses the first market as representative
+      // Parent row uses the first market as representative but with
+      // a synthetic _id to avoid duplicate keys when expanded
+      // (children include members[0] with its original _id)
       rows.push({
         ...members[0],
+        _id: `group-${key}` as any,
         _eventKey: key,
         _groupSize: members.length,
         _groupTitle: groupTitle,

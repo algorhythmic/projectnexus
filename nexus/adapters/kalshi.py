@@ -94,11 +94,11 @@ def _categorize_from_title(title: str) -> str:
 
 
 def _standardize_category(raw: Optional[str], title: str) -> str:
-    """Map a Kalshi category string to a standardized name."""
-    if raw:
-        mapped = _CATEGORY_MAP.get(raw.strip().lower())
-        if mapped:
-            return mapped
+    """Use the Kalshi category verbatim if available, otherwise fall back
+    to title-based heuristic."""
+    if raw and raw.strip():
+        # Title-case the raw category for consistent display
+        return raw.strip().title()
     return _categorize_from_title(title)
 
 
@@ -206,7 +206,6 @@ class KalshiAdapter(BaseAdapter):
 
         Uses Kalshi API filters to reduce result volume:
         - status=open: only tradeable markets
-        - min_close_ts: skip markets closing in <1h (about to expire)
         - mve_filter=exclude: skip multivariate combo markets (they have
           very long titles like "yes A,yes B,yes C" and rarely trade)
         """
@@ -217,14 +216,10 @@ class KalshiAdapter(BaseAdapter):
         max_pages = self._settings.kalshi_discovery_max_pages
         page = 0
 
-        # Only discover markets closing more than 1 hour from now
-        min_close = int(time.time()) + 3600
-
         while True:
             params: Dict[str, Any] = {
                 "limit": 200,
                 "status": "open",
-                "min_close_ts": min_close,
                 "mve_filter": "exclude",
             }
             if cursor:
