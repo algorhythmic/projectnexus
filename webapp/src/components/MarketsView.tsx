@@ -31,7 +31,7 @@ export function MarketsView() {
   const markets = useQuery(api.queries.getMarkets, {
     platform: selectedPlatform,
     searchTerm: debouncedSearchTerm || undefined,
-    count: 200,
+    count: 4000,
   });
 
   const marketData: Doc<"nexusMarkets">[] = markets || [];

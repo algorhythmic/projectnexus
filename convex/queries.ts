@@ -59,6 +59,12 @@ export const getMarketStats = query({
     const platformCounts: Record<string, number> = { kalshi, polymarket };
     const totalMarkets = kalshi + polymarket;
 
+    // Count active vs inactive
+    const activeMarkets = (await ctx.db
+      .query("nexusMarkets")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .take(PLATFORM_LIMIT)).length;
+
     // Sample recent markets for category distribution
     const sample = await ctx.db
       .query("nexusMarkets")
@@ -70,7 +76,7 @@ export const getMarketStats = query({
       categoryCounts[m.category] = (categoryCounts[m.category] || 0) + 1;
     }
 
-    return { totalMarkets, platformCounts, categoryCounts };
+    return { totalMarkets, activeMarkets, platformCounts, categoryCounts };
   },
 });
 
