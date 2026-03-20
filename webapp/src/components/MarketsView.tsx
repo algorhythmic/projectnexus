@@ -34,7 +34,7 @@ export function MarketsView() {
       platform: selectedPlatform,
       searchTerm: debouncedSearchTerm || undefined,
     },
-    { initialNumItems: 100 },
+    { initialNumItems: 500 },
   );
 
   const marketData: Doc<"nexusMarkets">[] = results;
@@ -117,7 +117,7 @@ export function MarketsView() {
           columns={columns}
           data={groupedData}
           onRowClick={handleRowClick}
-          onLoadMore={status === "CanLoadMore" ? () => loadMore(100) : undefined}
+          onLoadMore={status === "CanLoadMore" ? () => loadMore(500) : undefined}
           loadMoreStatus={status}
           tabletHiddenColumns={["lastPrice", "category", "endDate", "syncedAt", "actions"]}
           renderCard={(market, isSelected, toggleSelected) => {
