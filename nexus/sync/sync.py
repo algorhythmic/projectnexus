@@ -239,8 +239,8 @@ class SyncLayer(LoggerMixin):
                     if hasattr(self._store, "refresh_view"):
                         # v_active_anomalies is small — refresh every cycle
                         await self._store.refresh_view("v_active_anomalies")
-                        # v_current_market_state is heavy — refresh every 5 min
-                        if now - last_market_view >= 300:
+                        # v_current_market_state — refresh every 30s for responsiveness
+                        if now - last_market_view >= 30:
                             await self._store.refresh_view("v_current_market_state")
                             last_market_view = now
                     await self.sync_markets()
