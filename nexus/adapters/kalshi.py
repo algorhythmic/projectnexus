@@ -592,7 +592,12 @@ class KalshiAdapter(BaseAdapter):
             or ""
         )
         category = _standardize_category(raw_category, title)
-        description = raw.get("subtitle") or raw.get("description") or ""
+        description = (
+            raw.get("subtitle")
+            or raw.get("yes_sub_title")
+            or raw.get("description")
+            or ""
+        )
 
         return DiscoveredMarket(
             platform=Platform.KALSHI,
