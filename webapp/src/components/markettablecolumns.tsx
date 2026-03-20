@@ -36,6 +36,8 @@ export function getEventKey(externalId: string): string {
  * multi-market groups become a parent row (with _groupSize) followed by
  * child rows (with _isChild) when expanded.
  */
+const MAX_EXPANDED_OUTCOMES = 10;
+
 export function groupMarkets(
   markets: NexusMarket[],
   expandedKeys: Set<string>,
@@ -54,11 +56,8 @@ export function groupMarkets(
       rows.push({ ...members[0], _eventKey: key });
     } else {
       const isExpanded = expandedKeys.has(key);
-      // Use event title from any member (all share the same event)
       const groupTitle = members.find((m) => m.eventTitle)?.eventTitle || "";
-      // Parent row uses the first market as representative but with
-      // a synthetic _id to avoid duplicate keys when expanded
-      // (children include members[0] with its original _id)
+      // Parent row uses synthetic _id to avoid duplicate keys
       rows.push({
         ...members[0],
         _id: `group-${key}` as any,
@@ -68,7 +67,12 @@ export function groupMarkets(
         _isExpanded: isExpanded,
       });
       if (isExpanded) {
-        for (const m of members) {
+        // Sort by volume descending, truncate to top 10
+        const sorted = [...members].sort(
+          (a, b) => (b.volume ?? 0) - (a.volume ?? 0),
+        );
+        const shown = sorted.slice(0, MAX_EXPANDED_OUTCOMES);
+        for (const m of shown) {
           rows.push({ ...m, _eventKey: key, _isChild: true });
         }
       }
@@ -163,7 +167,10 @@ export const columns: ColumnDef<MarketRow>[] = [
           </a>
           {isGroup && (
             <span className="shrink-0 ml-1 px-1.5 py-0.5 text-xs font-bold bg-blue-200 text-blue-800 dark:bg-blue-700 dark:text-blue-200 border border-black rounded whitespace-nowrap">
-              {market._groupSize} outcomes
+              {(market._groupSize ?? 0) > MAX_EXPANDED_OUTCOMES
+                ? `${MAX_EXPANDED_OUTCOMES}+`
+                : market._groupSize}{" "}
+              outcomes
             </span>
           )}
         </div>

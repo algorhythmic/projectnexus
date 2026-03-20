@@ -138,9 +138,16 @@ SELECT
     latest_price.timestamp AS last_price_ts,
     latest_volume.new_value AS last_volume,
     latest_volume.timestamp AS last_volume_ts,
-    -- Rank score: weighted combination of activity recency (60%) and expiry proximity (40%)
-    -- Higher score = more interesting (recent price action + near expiry)
+    COALESCE(m.volume, 0) AS volume,
+    -- Rank score: volume (40%) + activity recency (30%) + expiry proximity (30%)
     (
+        COALESCE(
+            CASE WHEN m.volume > 0
+                 THEN LEAST(LN(m.volume + 1) / 10.0, 1.0)
+                 ELSE 0.0
+            END, 0.0
+        ) * 0.4
+        +
         COALESCE(
             CASE WHEN latest_price.timestamp IS NOT NULL
                  THEN LEAST(
@@ -152,7 +159,7 @@ SELECT
                  )
                  ELSE 0.0
             END, 0.0
-        ) * 0.6
+        ) * 0.3
         +
         COALESCE(
             CASE WHEN m.end_date IS NOT NULL AND m.end_date != ''
@@ -160,7 +167,7 @@ SELECT
                  THEN LEAST(1.0 / GREATEST(EXTRACT(EPOCH FROM (m.end_date::timestamptz - NOW())) / 86400.0, 0.01), 1.0)
                  ELSE 0.0
             END, 0.0
-        ) * 0.4
+        ) * 0.3
     ) AS rank_score
 FROM markets m
 LEFT JOIN LATERAL (
@@ -281,7 +288,7 @@ class PostgresStore(BaseStore, LoggerMixin):
         async with self.pool.acquire() as conn:
             await conn.execute(_SCHEMA_SQL)
             # Add columns that may not exist on older schemas
-            for col, typ in [("end_date", "TEXT")]:
+            for col, typ in [("end_date", "TEXT"), ("volume", "DOUBLE PRECISION DEFAULT 0")]:
                 try:
                     await conn.execute(
                         f"ALTER TABLE markets ADD COLUMN {col} {typ}"
@@ -291,7 +298,7 @@ class PostgresStore(BaseStore, LoggerMixin):
             # Recreate views if schema has changed (e.g. new columns)
             try:
                 await conn.fetchrow(
-                    "SELECT description, end_date, rank_score FROM v_current_market_state LIMIT 0"
+                    "SELECT description, end_date, rank_score, volume FROM v_current_market_state LIMIT 0"
                 )
             except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
                 await conn.execute(
@@ -328,10 +335,10 @@ class PostgresStore(BaseStore, LoggerMixin):
         sql = """
             INSERT INTO markets
                 (platform, external_id, title, description, category,
-                 end_date, is_active, first_seen_at, last_updated_at)
+                 end_date, is_active, first_seen_at, last_updated_at, volume)
             SELECT * FROM unnest(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                $6::text[], $7::bool[], $8::bigint[], $9::bigint[]
+                $6::text[], $7::bool[], $8::bigint[], $9::bigint[], $10::float8[]
             )
             ON CONFLICT (platform, external_id) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -339,7 +346,8 @@ class PostgresStore(BaseStore, LoggerMixin):
                 category = EXCLUDED.category,
                 end_date = EXCLUDED.end_date,
                 is_active = EXCLUDED.is_active,
-                last_updated_at = EXCLUDED.last_updated_at
+                last_updated_at = EXCLUDED.last_updated_at,
+                volume = EXCLUDED.volume
             RETURNING
                 CASE WHEN xmax = 0 THEN 1 ELSE 0 END
         """
@@ -356,11 +364,13 @@ class PostgresStore(BaseStore, LoggerMixin):
                 actives = [m.is_active for m in batch]
                 first_seen = [now_ms] * len(batch)
                 last_updated = [now_ms] * len(batch)
+                volumes = [m.volume or 0.0 for m in batch]
 
                 rows = await conn.fetch(
                     sql,
                     platforms, external_ids, titles, descriptions,
                     categories, end_dates, actives, first_seen, last_updated,
+                    volumes,
                 )
                 new_count += sum(1 for r in rows if r[0] == 1)
 
