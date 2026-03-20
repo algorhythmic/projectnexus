@@ -18,11 +18,13 @@ const applicationTables = {
     lastPriceTs: v.optional(v.union(v.number(), v.null())),
     lastVolume: v.optional(v.union(v.number(), v.null())),
     lastVolumeTs: v.optional(v.union(v.number(), v.null())),
+    rankScore: v.optional(v.number()),
     syncedAt: v.number(),
   })
     .index("by_nexus_id", ["marketId"])
     .index("by_platform", ["platform"])
     .index("by_active", ["isActive"])
+    .index("by_rank", ["rankScore"])
     .searchIndex("search_nexus_markets", {
       searchField: "title",
       filterFields: ["platform", "category", "isActive"],

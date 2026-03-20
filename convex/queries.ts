@@ -69,9 +69,11 @@ export const getMarketsPaginated = query({
         .paginate(args.paginationOpts);
     }
 
+    // Order by rank_score descending — most interesting markets first
+    // (high volume + near expiry = higher rank)
     return await ctx.db
       .query("nexusMarkets")
-      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .withIndex("by_rank")
       .order("desc")
       .paginate(args.paginationOpts);
   },

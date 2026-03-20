@@ -70,6 +70,7 @@ class SyncLayer(LoggerMixin):
                 "lastPriceTs": r.get("last_price_ts"),
                 "lastVolume": r.get("last_volume"),
                 "lastVolumeTs": r.get("last_volume_ts"),
+                "rankScore": float(r.get("rank_score") or 0.0),
                 "syncedAt": int(time.time() * 1000),
             }
             for r in rows
