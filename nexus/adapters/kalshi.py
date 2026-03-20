@@ -302,20 +302,15 @@ class KalshiAdapter(BaseAdapter):
             if raw_cat:
                 m.category = _standardize_category(raw_cat, m.title)
                 enriched += 1
-            # Store event title in description for group display,
-            # but preserve the market subtitle as the title when the
-            # market title matches the event title (multi-outcome markets
-            # where each outcome has a unique subtitle but shares the
-            # event question as its title).
+            # Store event title in description for group display.
+            # If the market has a subtitle (outcome-specific info like
+            # "$2.10 to $2.20" or "Cardinal Parolin"), use it as the
+            # title so each outcome is distinguishable when expanded.
             event_title = self._event_title_cache.get(et, "")
             if event_title:
                 original_subtitle = m.description
                 m.description = event_title
-                if (
-                    original_subtitle
-                    and original_subtitle != event_title
-                    and m.title == event_title
-                ):
+                if original_subtitle and original_subtitle != event_title:
                     m.title = original_subtitle
         if enriched:
             self.logger.info("Events enriched", count=enriched)
