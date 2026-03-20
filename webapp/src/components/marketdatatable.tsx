@@ -100,6 +100,15 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
     setRowSelection({});
   }, []);
 
+  // Count child rows so they don't consume page slots — expanded
+  // groups should always show all their children regardless of page size
+  const childRowCount = React.useMemo(
+    () => data.filter((r) => (r as Record<string, unknown>)._isChild).length,
+    [data],
+  );
+  const BASE_PAGE_SIZE = 10;
+  const [pageIndex, setPageIndex] = React.useState(0);
+
   const table = useReactTable({
     data,
     columns,
@@ -113,6 +122,12 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange: setRowSelection,
+    onPaginationChange: (updater) => {
+      const next = typeof updater === "function"
+        ? updater({ pageIndex, pageSize: BASE_PAGE_SIZE + childRowCount })
+        : updater;
+      setPageIndex(next.pageIndex);
+    },
     enableRowSelection: true,
     state: {
       sorting,
@@ -120,6 +135,7 @@ export function MarketDataTable<TData extends { _id: string }, TValue>({
       globalFilter,
       columnVisibility,
       rowSelection,
+      pagination: { pageIndex, pageSize: BASE_PAGE_SIZE + childRowCount },
     },
   })
 
