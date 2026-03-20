@@ -138,12 +138,18 @@ SELECT
     latest_price.timestamp AS last_price_ts,
     latest_volume.new_value AS last_volume,
     latest_volume.timestamp AS last_volume_ts,
-    -- Rank score: weighted combination of volume (60%) and expiry proximity (40%)
-    -- Higher score = more interesting (high volume + near expiry)
+    -- Rank score: weighted combination of activity recency (60%) and expiry proximity (40%)
+    -- Higher score = more interesting (recent price action + near expiry)
     (
         COALESCE(
-            CASE WHEN latest_volume.new_value > 0
-                 THEN LEAST(LN(latest_volume.new_value + 1) / 10.0, 1.0)
+            CASE WHEN latest_price.timestamp IS NOT NULL
+                 THEN LEAST(
+                     1.0 / GREATEST(
+                         EXTRACT(EPOCH FROM (NOW() - TO_TIMESTAMP(latest_price.timestamp / 1000.0))) / 3600.0,
+                         0.1
+                     ),
+                     1.0
+                 )
                  ELSE 0.0
             END, 0.0
         ) * 0.6
