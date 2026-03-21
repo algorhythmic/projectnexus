@@ -115,7 +115,7 @@ class TestNormalizeWsMessage:
         assert event is None
 
     def test_lifecycle_message(self, kalshi_adapter):
-        """Lifecycle messages become STATUS_CHANGE events."""
+        """Lifecycle messages (v1 type) become STATUS_CHANGE events."""
         msg = {
             "type": "market_lifecycle",
             "msg": {
@@ -132,6 +132,70 @@ class TestNormalizeWsMessage:
         assert meta["ticker"] == "SETTLE-MARKET"
         assert meta["status"] == "settled"
         assert meta["result"] == "yes"
+
+    def test_lifecycle_v2_message(self, kalshi_adapter):
+        """Lifecycle v2 messages also become STATUS_CHANGE events."""
+        msg = {
+            "type": "market_lifecycle_v2",
+            "msg": {
+                "market_ticker": "V2-MARKET",
+                "status": "closed",
+                "result": "no",
+            },
+        }
+        event = kalshi_adapter._normalize_ws_message(msg)
+        assert event is not None
+        assert event.event_type == EventType.STATUS_CHANGE
+        meta = json.loads(event.metadata)
+        assert meta["ticker"] == "V2-MARKET"
+        assert meta["status"] == "closed"
+
+    def test_event_lifecycle_message(self, kalshi_adapter):
+        """Event lifecycle messages from v2 channel become STATUS_CHANGE events."""
+        msg = {
+            "type": "event_lifecycle",
+            "msg": {
+                "event_ticker": "ECON-CPI-MAR",
+                "type": "event_created",
+                "status": "active",
+                "market_ticker": "CPI-MAR-UP-3",
+            },
+        }
+        event = kalshi_adapter._normalize_ws_message(msg)
+        assert event is not None
+        assert event.event_type == EventType.STATUS_CHANGE
+        assert event.market_id == 0
+        meta = json.loads(event.metadata)
+        assert meta["event_ticker"] == "ECON-CPI-MAR"
+        assert meta["lifecycle_type"] == "event_created"
+        assert meta["source"] == "event_lifecycle_v2"
+        assert meta["market_ticker"] == "CPI-MAR-UP-3"
+
+    def test_event_lifecycle_lifecycle_type_field(self, kalshi_adapter):
+        """Event lifecycle uses 'lifecycle_type' field if 'type' is absent in msg."""
+        msg = {
+            "type": "event_lifecycle",
+            "msg": {
+                "event_ticker": "SPORTS-NBA-LAKERS",
+                "lifecycle_type": "event_status_update",
+                "status": "closed",
+            },
+        }
+        event = kalshi_adapter._normalize_ws_message(msg)
+        assert event is not None
+        meta = json.loads(event.metadata)
+        assert meta["lifecycle_type"] == "event_status_update"
+
+    def test_event_lifecycle_missing_event_ticker(self, kalshi_adapter):
+        """Event lifecycle without event_ticker returns None."""
+        msg = {
+            "type": "event_lifecycle",
+            "msg": {
+                "status": "active",
+            },
+        }
+        event = kalshi_adapter._normalize_ws_message(msg)
+        assert event is None
 
     def test_subscription_ack_ignored(self, kalshi_adapter):
         """Subscription confirmation messages return None."""
@@ -229,3 +293,180 @@ class TestSubscribeMessage:
         assert sent_messages[0]["params"]["market_tickers"] == ["T1", "T2"]
         assert sent_messages[1]["params"]["market_tickers"] == ["T3", "T4"]
         assert sent_messages[2]["params"]["market_tickers"] == ["T5"]
+
+    async def test_subscribe_increments_msg_counter(self, kalshi_adapter):
+        """Each subscribe batch increments the message counter."""
+        sent_messages = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent_messages.append(json.loads(msg))
+
+        ws = FakeWS()
+        kalshi_adapter._ws_msg_counter = 0
+        await kalshi_adapter._send_subscribe(
+            ws, ["T1", "T2"], ["ticker"]
+        )
+
+        assert kalshi_adapter._ws_msg_counter == 1
+        assert sent_messages[0]["id"] == 1
+
+
+class TestDynamicSubscriptions:
+    """Test update_market_subscriptions for dynamic ticker management."""
+
+    async def test_add_tickers_with_sids(self, kalshi_adapter):
+        """Adding tickers with stored SIDs sends update_subscription."""
+        sent_messages = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent_messages.append(json.loads(msg))
+
+        kalshi_adapter._ws = FakeWS()
+        kalshi_adapter._subscription_ids = [101, 102]
+        kalshi_adapter._subscribed_tickers = {"OLD-1"}
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            add_tickers=["NEW-1", "NEW-2"]
+        )
+
+        assert result is True
+        assert len(sent_messages) == 1
+        msg = sent_messages[0]
+        assert msg["cmd"] == "update_subscription"
+        assert msg["params"]["action"] == "add_markets"
+        assert msg["params"]["sids"] == [101, 102]
+        assert set(msg["params"]["market_tickers"]) == {"NEW-1", "NEW-2"}
+        # Verify subscribed_tickers is updated
+        assert "NEW-1" in kalshi_adapter._subscribed_tickers
+        assert "NEW-2" in kalshi_adapter._subscribed_tickers
+
+    async def test_remove_tickers_with_sids(self, kalshi_adapter):
+        """Removing tickers with stored SIDs sends delete_markets."""
+        sent_messages = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent_messages.append(json.loads(msg))
+
+        kalshi_adapter._ws = FakeWS()
+        kalshi_adapter._subscription_ids = [101]
+        kalshi_adapter._subscribed_tickers = {"OLD-1", "OLD-2", "OLD-3"}
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            remove_tickers=["OLD-2"]
+        )
+
+        assert result is True
+        assert len(sent_messages) == 1
+        msg = sent_messages[0]
+        assert msg["cmd"] == "update_subscription"
+        assert msg["params"]["action"] == "delete_markets"
+        assert "OLD-2" not in kalshi_adapter._subscribed_tickers
+        assert "OLD-1" in kalshi_adapter._subscribed_tickers
+
+    async def test_add_tickers_fallback_subscribe(self, kalshi_adapter):
+        """Without SIDs, adding tickers falls back to a new subscribe command."""
+        sent_messages = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent_messages.append(json.loads(msg))
+
+        kalshi_adapter._ws = FakeWS()
+        kalshi_adapter._subscription_ids = []  # No SIDs
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            add_tickers=["FALLBACK-1"]
+        )
+
+        assert result is True
+        assert len(sent_messages) == 1
+        msg = sent_messages[0]
+        assert msg["cmd"] == "subscribe"
+        assert msg["params"]["market_tickers"] == ["FALLBACK-1"]
+        assert "market_lifecycle_v2" in msg["params"]["channels"]
+
+    async def test_no_ws_returns_false(self, kalshi_adapter):
+        """Without an active WebSocket, returns False."""
+        kalshi_adapter._ws = None
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            add_tickers=["NEW-1"]
+        )
+
+        assert result is False
+
+    async def test_ws_send_error_returns_false(self, kalshi_adapter):
+        """If the WS send fails, returns False gracefully."""
+
+        class BrokenWS:
+            async def send(self, msg):
+                raise ConnectionError("Connection lost")
+
+        kalshi_adapter._ws = BrokenWS()
+        kalshi_adapter._subscription_ids = [101]
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            add_tickers=["NEW-1"]
+        )
+
+        assert result is False
+
+    async def test_add_and_remove_simultaneously(self, kalshi_adapter):
+        """Can add and remove tickers in a single call."""
+        sent_messages = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent_messages.append(json.loads(msg))
+
+        kalshi_adapter._ws = FakeWS()
+        kalshi_adapter._subscription_ids = [101]
+        kalshi_adapter._subscribed_tickers = {"KEEP", "REMOVE"}
+
+        result = await kalshi_adapter.update_market_subscriptions(
+            add_tickers=["ADD"],
+            remove_tickers=["REMOVE"],
+        )
+
+        assert result is True
+        assert len(sent_messages) == 2  # One add, one remove
+        add_msg = sent_messages[0]
+        remove_msg = sent_messages[1]
+        assert add_msg["params"]["action"] == "add_markets"
+        assert remove_msg["params"]["action"] == "delete_markets"
+        assert "ADD" in kalshi_adapter._subscribed_tickers
+        assert "REMOVE" not in kalshi_adapter._subscribed_tickers
+
+
+class TestSubscriptionIdTracking:
+    """Test that subscription IDs are extracted from confirmation messages."""
+
+    def test_initial_state(self, kalshi_adapter):
+        """Adapter starts with empty subscription state."""
+        assert kalshi_adapter._subscription_ids == []
+        assert kalshi_adapter._ws is None
+        assert kalshi_adapter._ws_msg_counter == 0
+        assert kalshi_adapter._subscribed_tickers == set()
+
+
+class TestExchangeHealth:
+    """Test exchange status and schedule methods exist with correct interface."""
+
+    async def test_get_exchange_status_exists(self, kalshi_adapter):
+        """get_exchange_status method is available."""
+        assert hasattr(kalshi_adapter, "get_exchange_status")
+
+    async def test_get_exchange_schedule_exists(self, kalshi_adapter):
+        """get_exchange_schedule method is available."""
+        assert hasattr(kalshi_adapter, "get_exchange_schedule")
+
+
+class TestSingleMarketLookup:
+    """Test get_market method interface."""
+
+    async def test_get_market_exists(self, kalshi_adapter):
+        """get_market method is available."""
+        assert hasattr(kalshi_adapter, "get_market")

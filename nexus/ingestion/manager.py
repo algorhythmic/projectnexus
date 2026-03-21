@@ -21,6 +21,7 @@ from nexus.store.base import BaseStore
 
 if TYPE_CHECKING:
     from nexus.ingestion.metrics import MetricsCollector
+    from nexus.intelligence.health import MarketHealthTracker
 
 _TERMINAL_STATUSES = frozenset({"closed", "determined", "finalized", "settled"})
 
@@ -43,12 +44,14 @@ class IngestionManager(LoggerMixin):
         bus: EventBus,
         settings: Settings,
         metrics: Optional[MetricsCollector] = None,
+        health_tracker: Optional[MarketHealthTracker] = None,
     ) -> None:
         self._adapters = adapters
         self._store = store
         self._bus = bus
         self._settings = settings
         self._metrics = metrics
+        self._health_tracker = health_tracker
         self._running = False
 
         # ticker string → database market.id
@@ -185,7 +188,14 @@ class IngestionManager(LoggerMixin):
     # ------------------------------------------------------------------
 
     async def _streaming_task(self, adapter: BaseAdapter) -> None:
-        """Run the WebSocket streaming loop for a specific adapter."""
+        """Run the WebSocket streaming loop for a specific adapter.
+
+        When discovery finds new tickers, this task first attempts a
+        dynamic subscription update via ``adapter.update_market_subscriptions()``
+        (no reconnect needed).  If that fails or the adapter doesn't
+        support it, falls back to breaking the connection and reconnecting
+        with the full ticker set.
+        """
         adapter_name = adapter.__class__.__name__
 
         # Wait for the first discovery cycle to populate tickers
@@ -230,16 +240,23 @@ class IngestionManager(LoggerMixin):
                     resolved = self._resolve_event(event)
                     if resolved is not None:
                         await self._bus.put(resolved)
+                        # Feed trade/price events to health tracker
+                        if self._health_tracker is not None:
+                            self._health_tracker.process_event(resolved)
                         if resolved.event_type == EventType.STATUS_CHANGE:
                             await self._handle_status_change(resolved)
 
                     # Check if discovery found new tickers that need subscription
                     if self._resubscribe_needed.is_set():
-                        self.logger.info(
-                            "New tickers available — reconnecting to resubscribe",
-                            adapter=adapter_name,
-                        )
-                        break
+                        self._resubscribe_needed.clear()
+                        updated = await self._try_dynamic_resubscribe(adapter)
+                        if not updated:
+                            self.logger.info(
+                                "Dynamic update unavailable — reconnecting",
+                                adapter=adapter_name,
+                            )
+                            break
+
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -257,6 +274,38 @@ class IngestionManager(LoggerMixin):
                 # The adapter's connect() handles reconnection internally,
                 # but if it fails completely we log and retry
                 await asyncio.sleep(self._settings.ws_reconnect_delay)
+
+    async def _try_dynamic_resubscribe(self, adapter: BaseAdapter) -> bool:
+        """Attempt to add/remove tickers on the live WebSocket.
+
+        Returns True if the update was applied successfully, False if
+        the caller should fall back to a full reconnect.
+        """
+        current_tickers = set(
+            list(self._ticker_to_market_id.keys())[: self._settings.ws_max_subscriptions]
+        )
+        new_tickers = current_tickers - self._subscribed_tickers
+        removed_tickers = self._subscribed_tickers - current_tickers
+
+        if not new_tickers and not removed_tickers:
+            return True  # Nothing to change
+
+        success = await adapter.update_market_subscriptions(
+            add_tickers=list(new_tickers) if new_tickers else None,
+            remove_tickers=list(removed_tickers) if removed_tickers else None,
+        )
+
+        if success:
+            self._subscribed_tickers = current_tickers
+            self.logger.info(
+                "Dynamic subscription update applied",
+                added=len(new_tickers),
+                removed=len(removed_tickers),
+                total=len(self._subscribed_tickers),
+            )
+            return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Event resolution
@@ -306,12 +355,28 @@ class IngestionManager(LoggerMixin):
             return None
 
     async def _handle_status_change(self, event: EventRecord) -> None:
-        """Deactivate market if the status change is terminal."""
+        """Deactivate market if the status change is terminal.
+
+        Also handles event lifecycle messages from the v2 channel:
+        ``event_lifecycle`` messages with ``lifecycle_type`` of
+        ``event_created`` signal that new markets may be available.
+        """
         if not event.metadata:
             return
         try:
             data = json.loads(event.metadata)
         except (json.JSONDecodeError, TypeError):
+            return
+
+        # Event lifecycle: new event created → trigger targeted discovery
+        if data.get("source") == "event_lifecycle_v2":
+            lifecycle_type = data.get("lifecycle_type", "")
+            if lifecycle_type in ("event_created", "new_event"):
+                self.logger.info(
+                    "New event detected via lifecycle v2 — triggering discovery",
+                    event_ticker=data.get("event_ticker"),
+                )
+                self._resubscribe_needed.set()
             return
 
         status = data.get("status", "").lower()
@@ -324,6 +389,7 @@ class IngestionManager(LoggerMixin):
             ticker = data.get("ticker")
             if ticker and ticker in self._ticker_to_market_id:
                 del self._ticker_to_market_id[ticker]
+                self._subscribed_tickers.discard(ticker)
             self.logger.info(
                 "Market deactivated via WebSocket lifecycle",
                 market_id=event.market_id,

@@ -114,6 +114,59 @@ class BaseAdapter(LoggerMixin, ABC):
         yield  # type: ignore[misc]  # pragma: no cover
 
     # ------------------------------------------------------------------
+    # Optional capabilities (override in subclasses)
+    # ------------------------------------------------------------------
+
+    async def get_market(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single market by ticker.  O(1) lookup.
+
+        Returns the raw market dict, or None if not supported.
+        """
+        return None
+
+    async def get_exchange_status(self) -> Optional[Dict[str, Any]]:
+        """Check if the exchange is currently operational.
+
+        Returns status dict or None if not supported.
+        """
+        return None
+
+    async def get_exchange_schedule(self) -> Optional[Dict[str, Any]]:
+        """Get the exchange trading schedule.
+
+        Returns schedule dict or None if not supported.
+        """
+        return None
+
+    async def get_orderbook(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch the current orderbook for a market.
+
+        Returns the raw orderbook dict, or None if not supported.
+        """
+        return None
+
+    async def get_trades(
+        self,
+        ticker: Optional[str] = None,
+        limit: int = 100,
+        **kwargs: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch recent trades. Returns None if not supported."""
+        return None
+
+    async def update_market_subscriptions(
+        self,
+        add_tickers: Optional[Sequence[str]] = None,
+        remove_tickers: Optional[Sequence[str]] = None,
+    ) -> bool:
+        """Dynamically add/remove market subscriptions on an active WebSocket.
+
+        Returns True if the update was sent successfully, False if the
+        adapter doesn't support dynamic updates or has no active connection.
+        """
+        return False
+
+    # ------------------------------------------------------------------
     # HTTP helpers (ported from ETL BaseExtractor)
     # ------------------------------------------------------------------
 
