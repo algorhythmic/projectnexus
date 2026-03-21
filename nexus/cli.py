@@ -223,6 +223,11 @@ def run(
                 retention_days=settings.retention_days,
             )
 
+        # Build health tracker (in-memory market intelligence)
+        from nexus.intelligence.health import MarketHealthTracker
+
+        health_tracker = MarketHealthTracker()
+
         # Optionally build sync layer
         sync_layer = None
         convex_client = None
@@ -244,6 +249,7 @@ def run(
                 market_interval=settings.sync_market_interval_seconds,
                 summary_interval=settings.sync_summary_interval_seconds,
                 topics_interval=settings.sync_topics_interval_seconds,
+                health_tracker=health_tracker,
             )
 
         # Status summary
@@ -252,6 +258,7 @@ def run(
             components.append("detection")
         if sync_layer:
             components.append("sync")
+        components.append("health")
         console.print(
             f"Starting Nexus ({', '.join(components)}). "
             f"{len(adapters)} adapter(s), discovery every "
@@ -263,7 +270,8 @@ def run(
                 await stack.enter_async_context(a)
 
             manager = IngestionManager(
-                adapters, store, bus, settings, metrics=metrics
+                adapters, store, bus, settings, metrics=metrics,
+                health_tracker=health_tracker,
             )
 
             try:
@@ -1363,6 +1371,290 @@ def sync(
         asyncio.run(_sync())
     except KeyboardInterrupt:
         console.print("\nSync stopped.")
+
+
+@app.command()
+def candlesticks(
+    ticker: str = typer.Argument(..., help="Market ticker (e.g. AAPL-UP-100)"),
+    period: int = typer.Option(60, help="Candle interval in minutes"),
+    hours: int = typer.Option(24, help="Lookback window in hours"),
+    raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
+) -> None:
+    """Fetch candlestick (OHLCV) data for a market."""
+    from nexus.adapters.kalshi import KalshiAdapter
+
+    async def _candlesticks() -> None:
+        adapter = KalshiAdapter(settings)
+        async with adapter:
+            now = int(time.time())
+            candles = await adapter.get_candlesticks(
+                ticker=ticker,
+                period_interval=period,
+                start_ts=now - (hours * 3600),
+                end_ts=now,
+            )
+
+        if not candles:
+            console.print(f"[bold red]No candlestick data for {ticker}[/bold red]")
+            return
+
+        if raw:
+            console.print(_json.dumps(candles, indent=2))
+            return
+
+        table = Table(title=f"Candlesticks: {ticker} ({period}min candles, last {hours}h)")
+        table.add_column("Time", style="cyan")
+        table.add_column("Open", style="green", justify="right")
+        table.add_column("High", style="green", justify="right")
+        table.add_column("Low", style="red", justify="right")
+        table.add_column("Close", style="bold", justify="right")
+        table.add_column("Volume", style="blue", justify="right")
+
+        for c in candles[-30:]:  # Show last 30 candles max
+            begin = c.get("period_begin") or c.get("t") or ""
+            if isinstance(begin, (int, float)):
+                begin = _format_ms_timestamp(int(begin * 1000))
+            elif isinstance(begin, str) and len(begin) > 19:
+                begin = begin[:19]  # Trim timezone
+
+            o = c.get("open") or c.get("open_dollars") or ""
+            h = c.get("high") or c.get("high_dollars") or ""
+            lo = c.get("low") or c.get("low_dollars") or ""
+            cl = c.get("close") or c.get("close_dollars") or ""
+            vol = c.get("volume") or c.get("volume_fp") or ""
+
+            table.add_row(
+                str(begin),
+                f"${float(o):.2f}" if o else "—",
+                f"${float(h):.2f}" if h else "—",
+                f"${float(lo):.2f}" if lo else "—",
+                f"${float(cl):.2f}" if cl else "—",
+                str(vol),
+            )
+
+        console.print(table)
+        console.print(f"Total candles: {len(candles)}")
+
+    asyncio.run(_candlesticks())
+
+
+@app.command()
+def taxonomy(
+    raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
+) -> None:
+    """Fetch the Kalshi category taxonomy."""
+    from nexus.adapters.kalshi import KalshiAdapter
+
+    async def _taxonomy() -> None:
+        adapter = KalshiAdapter(settings)
+        async with adapter:
+            data = await adapter.get_category_taxonomy()
+
+        if not data:
+            console.print("[bold red]Failed to fetch taxonomy[/bold red]")
+            return
+
+        if raw:
+            console.print(_json.dumps(data, indent=2))
+            return
+
+        categories = data.get("categories", [])
+        table = Table(title="Kalshi Category Taxonomy")
+        table.add_column("Category", style="cyan")
+        table.add_column("Tags", style="green")
+
+        for cat in categories:
+            name = cat.get("name") or cat.get("category", "?")
+            tags = cat.get("tags", [])
+            table.add_row(name, ", ".join(str(t) for t in tags[:10]))
+
+        console.print(table)
+        console.print(f"Total categories: {len(categories)}")
+
+    asyncio.run(_taxonomy())
+
+
+@app.command(name="exchange-status")
+def exchange_status() -> None:
+    """Check Kalshi exchange operational status."""
+    from nexus.adapters.kalshi import KalshiAdapter
+
+    async def _status() -> None:
+        adapter = KalshiAdapter(settings)
+        async with adapter:
+            status = await adapter.get_exchange_status()
+            schedule = await adapter.get_exchange_schedule()
+
+        if status:
+            table = Table(title="Exchange Status")
+            table.add_column("Field", style="cyan")
+            table.add_column("Value", style="green")
+            for k, v in status.items():
+                table.add_row(str(k), str(v))
+            console.print(table)
+        else:
+            console.print("[bold red]Failed to get exchange status[/bold red]")
+
+        if schedule:
+            console.print(_json.dumps(schedule, indent=2))
+
+    asyncio.run(_status())
+
+
+@app.command()
+def backtest(
+    days: int = typer.Option(7, help="Historical window to replay (days)"),
+    step_hours: int = typer.Option(1, help="Step size between detection cycles (hours)"),
+    cap: int = typer.Option(200, help="Max markets per detection cycle"),
+) -> None:
+    """Replay anomaly detection against historical data for signal validation."""
+    from nexus.correlation.detector import AnomalyDetector
+    from nexus.correlation.windows import WindowComputer
+    from nexus.store import create_store
+
+    async def _backtest() -> None:
+        store = create_store(settings)
+        await store.initialize()
+
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - (days * 86_400_000)
+        step_ms = step_hours * 3_600_000
+
+        wc = WindowComputer(store)
+        detector = AnomalyDetector(
+            store, wc,
+            baseline_hours=settings.anomaly_baseline_hours,
+        )
+
+        total_anomalies = 0
+        total_cycles = 0
+        severity_buckets = {"high": 0, "medium": 0, "low": 0}
+
+        console.print(
+            f"Backtesting {days}d of history, stepping {step_hours}h, "
+            f"cap {cap} markets/cycle..."
+        )
+
+        cursor = start_ms + (settings.anomaly_baseline_hours * 3_600_000)
+        while cursor <= now_ms:
+            market_ids = await store.get_markets_with_recent_events(
+                cursor - step_ms
+            )
+            if len(market_ids) > cap:
+                market_ids = market_ids[:cap]
+
+            if market_ids:
+                count = await detector.detect_and_store(
+                    market_ids, settings.anomaly_window_configs, cursor
+                )
+                total_anomalies += count
+                total_cycles += 1
+
+                # Count severities from newly created anomalies
+                recent = await store.get_anomalies(
+                    since=cursor - step_ms, until=cursor, limit=1000
+                )
+                for a in recent:
+                    if a.severity >= 0.7:
+                        severity_buckets["high"] += 1
+                    elif a.severity >= 0.4:
+                        severity_buckets["medium"] += 1
+                    else:
+                        severity_buckets["low"] += 1
+
+            cursor += step_ms
+
+        await store.close()
+
+        table = Table(title=f"Backtest Results ({days}d)")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("Historical window", f"{days} days")
+        table.add_row("Detection cycles", str(total_cycles))
+        table.add_row("Total anomalies", str(total_anomalies))
+        table.add_row("Anomalies/day", f"{total_anomalies / max(days, 1):.1f}")
+        table.add_row("High severity (>=0.7)", str(severity_buckets["high"]))
+        table.add_row("Medium (0.4-0.7)", str(severity_buckets["medium"]))
+        table.add_row("Low (<0.4)", str(severity_buckets["low"]))
+
+        rate = total_anomalies / max(days, 1)
+        gate = "[green]PASS[/green]" if rate < 50 else "[red]FAIL[/red]"
+        table.add_row("Alert rate gate (<50/day)", gate)
+
+        console.print(table)
+
+    asyncio.run(_backtest())
+
+
+@app.command()
+def health(
+    tickers: str = typer.Option("", help="Comma-separated tickers to check (empty = all recent)"),
+    lookback: int = typer.Option(15, help="Lookback window in minutes for trade ingestion"),
+    top: int = typer.Option(20, help="Show top N markets by health score"),
+) -> None:
+    """Show market health scores from recent trade flow."""
+    from nexus.intelligence.health import MarketHealthTracker
+    from nexus.store import create_store
+
+    async def _health() -> None:
+        store = create_store(settings)
+        await store.initialize()
+
+        tracker = MarketHealthTracker()
+
+        # Load recent trades from the store
+        since_ms = int((time.time() - lookback * 60) * 1000)
+        events = await store.get_events(event_type="trade", since=since_ms, limit=5000)
+
+        for event in events:
+            tracker.process_event(event)
+
+        console.print(f"Loaded {len(events)} trades from last {lookback}min, tracking {tracker.tracked_count} markets")
+
+        # Get scores
+        details = tracker.get_health_details()
+
+        if tickers:
+            ticker_list = [t.strip() for t in tickers.split(",")]
+            details = {k: v for k, v in details.items() if k in ticker_list}
+
+        if not details:
+            console.print("[dim]No markets with health data.[/dim]")
+            await store.close()
+            return
+
+        # Sort by health score descending
+        sorted_details = sorted(details.items(), key=lambda x: x[1].health_score, reverse=True)[:top]
+
+        table = Table(title=f"Market Health Scores (top {top})")
+        table.add_column("Ticker", style="cyan")
+        table.add_column("Health", style="bold", justify="right")
+        table.add_column("Velocity", style="green", justify="right")
+        table.add_column("OB Imbal", style="yellow", justify="right")
+        table.add_column("Whale", style="red", justify="right")
+        table.add_column("Spread", style="blue", justify="right")
+        table.add_column("Momentum", style="magenta", justify="right")
+        table.add_column("Trades", style="dim", justify="right")
+
+        for ticker, h in sorted_details:
+            score_pct = int(h.health_score * 100)
+            sev = "red" if score_pct >= 70 else "yellow" if score_pct >= 40 else "green"
+            table.add_row(
+                ticker,
+                f"[{sev}]{score_pct}[/{sev}]",
+                f"{h.trade_velocity:.2f}",
+                f"{h.orderbook_imbalance:.2f}",
+                f"{h.whale_activity:.2f}",
+                f"{h.spread_tightness:.2f}",
+                f"{h.momentum:.2f}",
+                str(h.trade_count),
+            )
+
+        console.print(table)
+        await store.close()
+
+    asyncio.run(_health())
 
 
 if __name__ == "__main__":
