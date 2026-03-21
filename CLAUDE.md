@@ -8,7 +8,7 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 
 ## Current Status
 
-**226 tests passing** (+ 14 PostgreSQL integration tests that skip without `TEST_POSTGRES_DSN`)
+**324 tests passing** (+ 14 PostgreSQL integration tests that skip without `TEST_POSTGRES_DSN`)
 
 **Completed milestones:**
 - Phase 1: Kalshi REST adapter, WebSocket streaming, stability monitoring (Milestones 1.1–1.3)
@@ -35,11 +35,23 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Convex stale market cleanup: `cleanupStaleMarkets` mutation, throttled to every 5 min
 - Materialized view refresh bug fixed: `v_current_market_state` now refreshes every 5 min (was only on startup)
 
+**Kalshi API deep dive (completed 2026-03-20):**
+- Dynamic WS subscriptions (`update_subscription` — no reconnect needed for new tickers)
+- Lifecycle v2 channel (`market_lifecycle_v2` — instant new-market detection via event_lifecycle)
+- Exchange health awareness (`get_exchange_status`, `get_exchange_schedule`)
+- Candlestick charts (Convex caching proxy + TradingView `lightweight-charts` React component)
+- Market intelligence health score (5-signal in-memory synthesis: velocity, imbalance, whale, spread, momentum)
+- Series pattern detection (coordinated moves across same-series markets)
+- Catalyst attribution (structured CatalystAnalysis for Phase 5 LLM prompts)
+- Category taxonomy, single market lookup, orderbook depth, trade flow, milestones REST methods
+- Backtest CLI (`nexus backtest` replays detection against historical data)
+
 **Next milestones:**
+- Deploy Convex schema (`npx convex dev --once`) for candlestickCache + healthScore + candlesticks action
+- Deploy Fly.io (`fly deploy`) for health tracker + series detector + new REST methods
 - Verify OOM fixes hold during peak hours (check `rss_mb` in fly logs 9:30 AM–8 PM ET)
-- Verify MarketFinder UI shows real prices (post N/A fix, check after 9:30 AM ET when markets have active orders)
 - Run initial topic clustering (`nexus cluster`) to enable trending topics
-- Phase 5: LLM narrative layer
+- Phase 5: LLM narrative layer (catalyst attribution foundation is ready)
 
 ## Repository Layout (Monorepo)
 
@@ -48,14 +60,16 @@ projectnexus/                   # Git root — monorepo
 ├── nexus/                      # Python package (data pipeline)
 │   ├── core/                   # config.py, logging.py, types.py
 │   ├── adapters/               # auth.py, base.py, kalshi.py, polymarket.py
-│   ├── ingestion/              # discovery.py, bus.py
+│   ├── ingestion/              # discovery.py, bus.py, manager.py, metrics.py
 │   ├── store/                  # base.py, sqlite.py, postgres.py, __init__.py (factory)
-│   ├── correlation/            # detector, correlator, cross_platform
+│   ├── correlation/            # detector, correlator, cross_platform, series_detector
+│   ├── intelligence/           # health.py (market health score), narrative.py (catalyst attribution)
 │   ├── sync/                   # convex_client.py, sync.py
 │   └── cli.py
 ├── convex/                     # Convex backend (single source of truth)
-│   ├── schema.ts               # All tables: sync targets + webapp-owned
+│   ├── schema.ts               # All tables: sync targets + webapp-owned + candlestickCache
 │   ├── nexusSync.ts            # Mutations called by Python sync layer
+│   ├── candlesticks.ts         # Convex action: Kalshi API proxy with 60s cache
 │   ├── queries.ts              # Read queries for React components
 │   └── auth.ts, users.ts, ... # Webapp-specific Convex functions
 ├── webapp/                     # MarketFinder React frontend
@@ -94,6 +108,7 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **@convex-dev/auth ^0.0.80** with Password + Anonymous providers
 - **TanStack React Table 8.21.3** for data tables
 - **Tailwind CSS** with neobrutalist design system
+- **lightweight-charts 5.x** (TradingView) for OHLCV candlestick charts
 - **lucide-react** for icons, **Radix UI** primitives, **shadcn/ui** component library
 
 ## Code Conventions
@@ -106,6 +121,9 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **EventBus** (`nexus/ingestion/bus.py`): Bounded `asyncio.Queue` with batch drain worker for backpressure.
 - **IngestionManager** (`nexus/ingestion/discovery.py`): TaskGroup orchestrates discovery + streaming concurrently.
 - **MetricsCollector** (`nexus/core/`): In-memory metrics with rolling throughput window. ErrorCategory enum tracks ws_disconnect, rate_limit_hit, etc.
+- **MarketHealthTracker** (`nexus/intelligence/health.py`): In-memory rolling windows that synthesize trade flow, orderbook depth, and momentum into a per-market 0–1 health score. No DB tables — purely in-memory with `deque` windows. Fed by IngestionManager, consumed by SyncLayer.
+- **SeriesPatternDetector** (`nexus/correlation/series_detector.py`): Detects when 3+ markets in a series (same ticker prefix) move together in a time window. Runs in DetectionLoop after single-market detection.
+- **CatalystAnalyzer** (`nexus/intelligence/narrative.py`): Gathers contextual signals (trade burst, whale %, taker imbalance) to explain anomalies. Outputs structured `CatalystAnalysis` dataclass ready for Phase 5 LLM prompts.
 
 ### Naming
 - Pydantic models for shared types live in `nexus/core/types.py`: `Platform`, `EventType`, `MarketRecord`, `EventRecord`, `DiscoveredMarket`
@@ -146,10 +164,13 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 ### Convex Schema (`convex/schema.ts`)
 
 **Sync tables (populated by Nexus, read-only for webapp):**
-- `nexusMarkets` — market data with price/volume, indexed by platform/active/search
+- `nexusMarkets` — market data with price/volume/healthScore, indexed by platform/active/search
 - `activeAnomalies` — detected anomalies with severity/type
 - `trendingTopics` — topic clusters ranked by anomaly activity
 - `marketSummaries` — aggregated market event statistics
+
+**Cache tables (populated by Convex actions):**
+- `candlestickCache` — OHLCV data fetched on-demand from Kalshi API, cached 60s
 
 **App-owned tables:**
 - `users` — preferences (categories, platforms, notification toggles)
@@ -168,6 +189,9 @@ The `marketfinder-main/` and `marketfinder_ETL-main/` directories are gitignored
 - **Data model:** Series → Events → Markets hierarchy. `series_ticker` groups recurring markets (e.g., daily BTC price markets)
 - **~3,500+ active non-combo markets**, defined trading hours (most active 9:30 AM–8 PM ET)
 - **Field naming (Jan–Mar 2026 migration):** Prices use `_dollars` suffix (FixedPointDollars strings, e.g. `"0.6500"`): `yes_ask_dollars`, `yes_bid_dollars`, `last_price_dollars`. Counts use `_fp` suffix (FixedPointCount strings, e.g. `"10.00"`): `volume_fp`, `open_interest_fp`, `count_fp`. Legacy fields (`yes_ask`, `yes_bid`, `last_price`, `volume`, `open_interest`, `count`, `category`) were removed. See `docs.kalshi.com/changelog`.
+- **`"0.0000"` gotcha:** FixedPointDollars strings like `"0.0000"` are truthy in Python but mean "no data." Don't use `or` chains — use explicit `float(val) > 0` checks. See `_calculate_yes_price()` in `kalshi.py`.
+- **WebSocket channels:** `ticker` (price updates), `trade` (individual trades), `market_lifecycle_v2` (market + event lifecycle). The v2 channel adds `event_lifecycle` messages for instant new-market detection. Private channels (orderbook_delta, fill) require authenticated WS.
+- **Dynamic WS subscriptions:** `update_subscription` command with `action: "add_markets"` / `"delete_markets"` adds/removes tickers without reconnecting. Requires subscription IDs (`sid`) from confirmation messages.
 - **Market statuses:** `initialized`, `inactive`, `active`, `closed`, `determined`, `disputed`, `amended`, `finalized` (no "open" status)
 
 ### Polymarket
@@ -193,7 +217,8 @@ Defined in `sql/schema.sql` and inline in store implementations.
 - BIGSERIAL primary keys, `$1/$2/$3` numbered params (not `?`)
 - `INSERT ... ON CONFLICT DO UPDATE` for upserts (not `INSERT OR REPLACE`, to preserve ID stability)
 - Events table: `PARTITION BY RANGE (timestamp)` with monthly partitions
-- 4 materialized views: `v_current_market_state`, `v_active_anomalies`, `v_trending_topics`, `v_market_summaries`
+- 5 materialized views: `v_current_market_state`, `v_active_anomalies`, `v_trending_topics`, `v_market_summaries`, `v_hourly_activity`
+- `compute_candlesticks()` aggregates OHLCV from existing `price_change` events via SQL CTEs (no separate candle table)
 - Connection pooling via `asyncpg.create_pool()`
 
 ## Relationship: Nexus ↔ MarketFinder (Monorepo)
@@ -235,6 +260,11 @@ python -m poetry run nexus discover      # One-shot discovery cycle
 python -m poetry run nexus detect        # One-shot detection cycle
 python -m poetry run nexus db-stats      # Market/event counts
 python -m poetry run nexus refresh-views # Refresh PostgreSQL materialized views
+python -m poetry run nexus health        # Show market health scores from trade flow
+python -m poetry run nexus backtest      # Replay detection against historical data
+python -m poetry run nexus candlesticks TICKER  # Fetch OHLCV for a market
+python -m poetry run nexus taxonomy      # Display Kalshi category hierarchy
+python -m poetry run nexus exchange-status  # Check exchange operational status
 
 # ─── Convex (from repo root) ───
 npm install                              # First time only
@@ -251,6 +281,25 @@ npx tsc --noEmit                         # Type check
 npx convex dev --once                    # 1. Deploy Convex schema + functions
 fly deploy                               # 2. Deploy Nexus to Fly.io
 ```
+
+## Anomaly Detection Tuning
+
+Thresholds were calibrated on 2026-03-18 for prediction market data:
+- `ANOMALY_PRICE_CHANGE_THRESHOLD`: 0.03 (3%) — prediction markets are 0-1 bounded, typical moves 1-3%
+- `ANOMALY_VOLUME_SPIKE_MULTIPLIER`: 2.0
+- `ANOMALY_ZSCORE_THRESHOLD`: 1.5
+- **Severity:** Logarithmic scaling (`log10(ratio+1)/log10(101)`) — 2x threshold → 0.15, 5x → 0.35, 100x → 1.0
+- **Deduplication:** Markets with existing active anomalies are skipped (single SQL JOIN query)
+- **Series detection:** 3+ markets in the same series moving >3% in the same direction within 30min triggers a cluster anomaly
+- **Health score weights:** velocity=0.25, imbalance=0.20, whale=0.20, spread=0.15, momentum=0.20
+- **Known:** Only 1440min window anomalies fire during off-hours; short windows need peak-hour activity. Topic clusters empty until `nexus cluster` is run (requires ANTHROPIC_API_KEY).
+
+## Infrastructure Gotchas
+
+- **Supabase 500MB limit:** Discovery was accumulating 144K+ markets from cursor instability. Fixed: 5 pages max, mve_filter=exclude, min_close_ts. Stale markets purged but autovacuum may not have reclaimed space yet.
+- **Fly.io 1GB RAM:** Detection capped at 200 markets/cycle. `_last_cycle_ts` initialized to 10min ago (not 0) to prevent OOM on restart. Off-peak RSS: ~78MB. Monitor `rss_mb` in fly logs during peak hours (9:30 AM–8 PM ET).
+- **Convex read limits:** Only sync markets with events (1000 vs 90K+). Old documents age out via `cleanupStaleMarkets`.
+- **Always verify external API responses** before coding against them — docs and existing code may reference stale field names (learned from the Jan 2026 `_dollars` migration).
 
 ## Important Warnings
 
