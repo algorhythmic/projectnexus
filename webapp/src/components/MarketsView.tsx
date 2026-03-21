@@ -5,6 +5,7 @@ import { Doc } from "../../../convex/_generated/dataModel";
 import { MarketDataTable } from "./marketdatatable";
 import { columns, groupMarkets, getEventKey, type MarketRow } from "./markettablecolumns";
 import { MarketComparisonDialog } from "./MarketComparisonDialog";
+import { MarketDetailDialog } from "./MarketDetailDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { GitCompareArrows, X, ChevronRight, ChevronDown } from "lucide-react";
@@ -25,6 +26,8 @@ export function MarketsView() {
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [selectedMarkets, setSelectedMarkets] = useState<Doc<"nexusMarkets">[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [detailMarket, setDetailMarket] = useState<Doc<"nexusMarkets"> | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
@@ -58,6 +61,10 @@ export function MarketsView() {
         }
         return next;
       });
+    } else {
+      // Single market or child outcome — open detail dialog
+      setDetailMarket(row);
+      setDetailOpen(true);
     }
   }, []);
 
@@ -119,7 +126,7 @@ export function MarketsView() {
           onRowClick={handleRowClick}
           onLoadMore={status === "CanLoadMore" ? () => loadMore(500) : undefined}
           loadMoreStatus={status}
-          tabletHiddenColumns={["lastPrice", "category", "endDate", "syncedAt", "actions"]}
+          tabletHiddenColumns={["lastPrice", "category", "healthScore", "endDate", "syncedAt", "actions"]}
           renderCard={(market, isSelected, toggleSelected) => {
             const isGroup = (market._groupSize ?? 0) > 1;
             const isChild = market._isChild;
@@ -314,6 +321,12 @@ export function MarketsView() {
         markets={selectedMarkets}
         open={comparisonOpen}
         onOpenChange={setComparisonOpen}
+      />
+
+      <MarketDetailDialog
+        market={detailMarket}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
       />
     </div>
   );

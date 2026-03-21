@@ -20,6 +20,7 @@ const applicationTables = {
     lastVolumeTs: v.optional(v.union(v.number(), v.null())),
     volume: v.optional(v.number()),
     rankScore: v.optional(v.number()),
+    healthScore: v.optional(v.union(v.number(), v.null())),
     syncedAt: v.number(),
   })
     .index("by_nexus_id", ["marketId"])
@@ -71,6 +72,24 @@ const applicationTables = {
   })
     .index("by_market_id", ["marketId"])
     .index("by_platform", ["platform"]),
+
+  // ── Candlestick cache (on-demand, fetched by Convex action) ────
+
+  candlestickCache: defineTable({
+    ticker: v.string(),
+    periodInterval: v.number(),
+    candles: v.array(
+      v.object({
+        time: v.number(),
+        open: v.number(),
+        high: v.number(),
+        low: v.number(),
+        close: v.number(),
+        volume: v.number(),
+      })
+    ),
+    fetchedAt: v.number(),
+  }).index("by_ticker_period", ["ticker", "periodInterval"]),
 
   // ── Webapp-owned tables ─────────────────────────────────────────
 
