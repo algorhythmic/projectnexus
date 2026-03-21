@@ -241,6 +241,25 @@ export const columns: ColumnDef<MarketRow>[] = [
     cell: ({ row }) => <div className="text-gray-700 dark:text-gray-300">{row.getValue("category")}</div>,
   },
   {
+    accessorKey: "healthScore",
+    header: () => (
+      <span className="font-bold text-black dark:text-white text-xs">Health</span>
+    ),
+    cell: ({ row }) => {
+      const score = row.getValue("healthScore") as number | null | undefined;
+      if (score == null) return <span className="text-gray-400 dark:text-gray-600 text-xs">—</span>;
+      const pct = Math.round(score * 100);
+      let colorClass = "bg-blue-200 text-blue-800 dark:bg-blue-800 dark:text-blue-200";
+      if (pct >= 70) colorClass = "bg-red-200 text-red-800 dark:bg-red-800 dark:text-red-200";
+      else if (pct >= 40) colorClass = "bg-yellow-200 text-yellow-800 dark:bg-yellow-700 dark:text-yellow-200";
+      return (
+        <span className={`inline-block px-1.5 py-0.5 rounded border border-black text-[11px] font-bold ${colorClass}`}>
+          {pct}
+        </span>
+      );
+    },
+  },
+  {
     accessorKey: "endDate",
     header: ({ column }) => (
       <Button

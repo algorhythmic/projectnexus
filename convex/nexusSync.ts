@@ -33,6 +33,7 @@ export const upsertMarkets = internalMutation({
         lastVolumeTs: v.optional(v.union(v.number(), v.null())),
         volume: v.optional(v.number()),
         rankScore: v.optional(v.number()),
+        healthScore: v.optional(v.union(v.number(), v.null())),
         syncedAt: v.number(),
       })
     ),

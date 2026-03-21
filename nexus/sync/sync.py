@@ -21,6 +21,9 @@ class SyncLayer(LoggerMixin):
         activeAnomalies  ← v_active_anomalies        (event-driven / 30s)
         trendingTopics   ← v_trending_topics          (every 5min)
         marketSummaries  ← v_market_summaries         (every 2min)
+
+    If a ``health_tracker`` is provided, the market sync merges in
+    computed health scores from the in-memory intelligence engine.
     """
 
     def __init__(
@@ -30,12 +33,14 @@ class SyncLayer(LoggerMixin):
         market_interval: int = 30,
         summary_interval: int = 120,
         topics_interval: int = 300,
+        health_tracker: Any = None,  # MarketHealthTracker
     ) -> None:
         self._store = store
         self._convex = convex
         self._market_interval = market_interval
         self._summary_interval = summary_interval
         self._topics_interval = topics_interval
+        self._health_tracker = health_tracker
         self._running = False
         self._last_cleanup: float = 0.0
 
@@ -51,10 +56,21 @@ class SyncLayer(LoggerMixin):
 
         Only syncs markets that have received at least one event (price
         or volume) to avoid pushing 144K+ discovered-but-untracked markets.
+
+        If a health tracker is configured, merges in computed health
+        scores by matching on ``external_id`` (ticker).
         """
         rows = await self._store.query_market_state(with_events_only=True)
         if not rows:
             return 0
+
+        # Get health scores if tracker is available
+        health_scores: Dict[str, float] = {}
+        if self._health_tracker is not None:
+            try:
+                health_scores = self._health_tracker.get_health_scores()
+            except Exception:
+                self.logger.debug("health_scores_unavailable")
 
         records = [
             {
@@ -72,6 +88,7 @@ class SyncLayer(LoggerMixin):
                 "lastVolumeTs": r.get("last_volume_ts"),
                 "volume": float(r.get("volume") or 0.0),
                 "rankScore": float(r.get("rank_score") or 0.0),
+                "healthScore": health_scores.get(r["external_id"]),
                 "syncedAt": int(time.time() * 1000),
             }
             for r in rows
