@@ -321,6 +321,33 @@ class BaseStore(ABC):
         """
         return []
 
+    # ------------------------------------------------------------------
+    # Candlestick aggregation (Feature C)
+    # ------------------------------------------------------------------
+
+    async def compute_candlesticks(
+        self,
+        market_id: int,
+        period_minutes: int = 60,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> List[dict]:
+        """Compute OHLCV candlesticks from stored events.
+
+        Returns list of dicts with keys: time, open, high, low, close, volume.
+        Default implementation returns empty list (PostgreSQL-only feature).
+        """
+        return []
+
+    async def get_series_markets(
+        self, series_prefix: str
+    ) -> List[MarketRecord]:
+        """Get active markets matching a series prefix.
+
+        Default implementation returns empty list.
+        """
+        return []
+
     @abstractmethod
     async def close(self) -> None:
         """Close the database connection."""

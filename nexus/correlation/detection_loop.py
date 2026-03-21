@@ -10,6 +10,7 @@ from nexus.core.types import WindowConfig
 from nexus.correlation.correlator import ClusterCorrelator
 from nexus.correlation.cross_platform import CrossPlatformCorrelator
 from nexus.correlation.detector import AnomalyDetector
+from nexus.correlation.series_detector import SeriesPatternDetector
 from nexus.correlation.windows import WindowComputer
 from nexus.ingestion.health import _get_rss_mb
 from nexus.store.base import BaseStore
@@ -109,6 +110,18 @@ class DetectionLoop(LoggerMixin):
             )
             cluster_count = await correlator.correlate_and_store(now_ms)
 
+        # Run series pattern detection
+        series_count = 0
+        if len(market_ids) >= 3:
+            series_detector = SeriesPatternDetector(
+                self._store,
+                min_movers=max(3, self._cluster_min_markets),
+                window_minutes=self._cluster_window_minutes,
+            )
+            series_count = await series_detector.detect_and_store(
+                market_ids, now_ms
+            )
+
         # Run cross-platform correlation if enabled
         xplat_count = 0
         if self._cross_platform_enabled:
@@ -144,12 +157,13 @@ class DetectionLoop(LoggerMixin):
             markets_scanned=len(market_ids),
             anomalies_found=count,
             cluster_anomalies=cluster_count,
+            series_anomalies=series_count,
             cross_platform_anomalies=xplat_count,
             events_pruned=pruned,
             thresholds=thresholds,
             **rss_extra,
         )
-        return count + cluster_count + xplat_count
+        return count + cluster_count + series_count + xplat_count
 
     async def run_forever(self) -> None:
         """Run detection cycles at the configured interval."""

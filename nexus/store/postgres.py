@@ -1059,6 +1059,137 @@ class PostgresStore(BaseStore, LoggerMixin):
         self.logger.info("Materialized views refreshed", concurrently=concurrently)
 
     # ------------------------------------------------------------------
+    # Candlestick aggregation (Feature C)
+    # ------------------------------------------------------------------
+
+    async def compute_candlesticks(
+        self,
+        market_id: int,
+        period_minutes: int = 60,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> List[dict]:
+        """Compute OHLCV candlesticks from stored price_change events.
+
+        Uses SQL window functions to aggregate events into time buckets.
+        Each candle has open, high, low, close (from price), and volume
+        (from volume_update events in the same bucket).
+
+        Args:
+            market_id: Internal market ID.
+            period_minutes: Candle width in minutes (default 60).
+            start_ts: Start timestamp (Unix ms). Defaults to 24h ago.
+            end_ts: End timestamp (Unix ms). Defaults to now.
+
+        Returns:
+            List of dicts with keys: time, open, high, low, close, volume.
+        """
+        import time as _time
+
+        now_ms = int(_time.time() * 1000)
+        if end_ts is None:
+            end_ts = now_ms
+        if start_ts is None:
+            start_ts = now_ms - 86_400_000  # 24 hours
+
+        period_ms = period_minutes * 60 * 1000
+
+        query = """
+            WITH price_events AS (
+                SELECT
+                    timestamp,
+                    new_value AS price,
+                    (timestamp / $4) AS bucket
+                FROM events
+                WHERE market_id = $1
+                  AND event_type = 'price_change'
+                  AND timestamp >= $2
+                  AND timestamp <= $3
+                  AND new_value > 0
+            ),
+            volume_events AS (
+                SELECT
+                    (timestamp / $4) AS bucket,
+                    SUM(new_value) AS total_volume
+                FROM events
+                WHERE market_id = $1
+                  AND event_type IN ('trade', 'volume_update')
+                  AND timestamp >= $2
+                  AND timestamp <= $3
+                GROUP BY (timestamp / $4)
+            ),
+            bucketed AS (
+                SELECT
+                    bucket,
+                    MIN(timestamp) AS first_ts,
+                    MAX(timestamp) AS last_ts,
+                    MIN(price) AS low,
+                    MAX(price) AS high,
+                    COUNT(*) AS tick_count
+                FROM price_events
+                GROUP BY bucket
+            ),
+            with_open_close AS (
+                SELECT
+                    b.bucket,
+                    b.first_ts,
+                    b.low,
+                    b.high,
+                    b.tick_count,
+                    p_open.price AS open_price,
+                    p_close.price AS close_price
+                FROM bucketed b
+                JOIN price_events p_open
+                    ON p_open.bucket = b.bucket AND p_open.timestamp = b.first_ts
+                JOIN price_events p_close
+                    ON p_close.bucket = b.bucket AND p_close.timestamp = b.last_ts
+            )
+            SELECT
+                (oc.bucket * $4 / 1000)::BIGINT AS time_sec,
+                oc.open_price AS open,
+                oc.high,
+                oc.low,
+                oc.close_price AS close,
+                COALESCE(v.total_volume, 0) AS volume
+            FROM with_open_close oc
+            LEFT JOIN volume_events v ON v.bucket = oc.bucket
+            ORDER BY oc.bucket ASC
+        """
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, market_id, start_ts, end_ts, period_ms)
+
+        return [
+            {
+                "time": int(r["time_sec"]),
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "volume": float(r["volume"]),
+            }
+            for r in rows
+        ]
+
+    async def get_series_markets(
+        self, series_prefix: str
+    ) -> List[MarketRecord]:
+        """Get all active markets whose external_id starts with a series prefix.
+
+        Kalshi tickers follow SERIES-OUTCOME format, so this groups all
+        outcomes for a series (e.g., all BTC daily price markets).
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM markets
+                   WHERE external_id LIKE $1 || '-%'
+                     AND is_active = TRUE
+                   ORDER BY external_id""",
+                series_prefix,
+            )
+        return [self._row_to_market(r) for r in rows]
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
