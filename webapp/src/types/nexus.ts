@@ -31,6 +31,8 @@ export interface CatalystInfo {
   confidence: number;
   signals: string[];
   source: "template" | "llm";
+  llm_available?: boolean;
+  template_headline?: string;
 }
 
 export interface NexusAnomaly {

@@ -118,10 +118,18 @@ class SyncLayer(LoggerMixin):
             }
 
             # If metadata contains catalyst analysis, render it
-            catalyst = self._parse_catalyst(r.get("metadata"), r.get("summary") or "")
+            meta_raw = r.get("metadata") or ""
+            catalyst = self._parse_catalyst(meta_raw, r.get("summary") or "")
             if catalyst is not None:
                 title = (r.get("summary") or "").split(":")[0].strip()
-                record["catalyst"] = renderer.render_structured(catalyst, title)
+
+                # Prefer pre-computed narratives from detection loop
+                # (which may include LLM narrative for A/B comparison)
+                pre_computed = self._extract_precomputed_narrative(meta_raw)
+                if pre_computed:
+                    record["catalyst"] = pre_computed
+                else:
+                    record["catalyst"] = renderer.render_structured(catalyst, title)
 
             records.append(record)
 
@@ -208,6 +216,44 @@ class SyncLayer(LoggerMixin):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_precomputed_narrative(metadata_str: str) -> Optional[Dict[str, Any]]:
+        """Extract pre-computed narrative from metadata (LLM preferred, template fallback).
+
+        The detection loop stores both ``template_narrative`` and ``llm_narrative``
+        in metadata when the LLM is enabled.  This method picks the best one.
+        """
+        if not metadata_str:
+            return None
+        try:
+            data = json.loads(metadata_str)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        llm = data.get("llm_narrative")
+        template = data.get("template_narrative")
+
+        if llm and isinstance(llm, dict):
+            return {
+                "headline": llm.get("headline", ""),
+                "narrative": llm.get("narrative", ""),
+                "catalyst_type": data.get("catalyst_type", "unknown"),
+                "confidence": llm.get("confidence", 0.0),
+                "signals": template.get("signals", []) if isinstance(template, dict) else [],
+                "source": "llm",
+                "llm_available": True,
+                "template_headline": template.get("headline", "") if isinstance(template, dict) else "",
+            }
+
+        if template and isinstance(template, dict):
+            result = dict(template)
+            result["llm_available"] = False
+            return result
+
+        return None
 
     @staticmethod
     def _parse_catalyst(metadata_str: Optional[str], summary: str) -> Optional[CatalystAnalysis]:

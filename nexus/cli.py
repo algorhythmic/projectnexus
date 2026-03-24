@@ -1687,5 +1687,78 @@ def health(
     asyncio.run(_health())
 
 
+@app.command()
+def evaluate(
+    days: int = typer.Option(7, "--days", help="Look back N days"),
+    fmt: str = typer.Option("table", "--format", help="Output format: table or csv"),
+) -> None:
+    """Compare template vs LLM narratives for recent anomalies (Hypothesis C)."""
+    from nexus.store import create_store
+
+    async def _evaluate() -> None:
+        store = create_store(settings)
+        await store.initialize()
+
+        import time as _time
+        since = int((_time.time() - days * 86400) * 1000)
+        anomalies = await store.get_anomalies(since=since, limit=500)
+        await store.close()
+
+        rows = []
+        for a in anomalies:
+            if not a.metadata:
+                continue
+            try:
+                meta = _json.loads(a.metadata)
+            except _json.JSONDecodeError:
+                continue
+            tmpl = meta.get("template_narrative")
+            llm = meta.get("llm_narrative")
+            if not tmpl:
+                continue
+            rows.append({
+                "id": a.id,
+                "severity": a.severity,
+                "type": meta.get("catalyst_type", "?"),
+                "template_headline": tmpl.get("headline", ""),
+                "llm_headline": llm.get("headline", "") if llm else "(no LLM)",
+                "template_narrative": tmpl.get("narrative", ""),
+                "llm_narrative": llm.get("narrative", "") if llm else "(no LLM)",
+                "llm_confidence": llm.get("confidence", "") if llm else "",
+                "llm_catalyst": llm.get("attributed_catalyst", "") if llm else "",
+            })
+
+        if not rows:
+            console.print("[yellow]No anomalies with narrative data found.[/yellow]")
+            return
+
+        if fmt == "csv":
+            import csv
+            import sys
+            writer = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        else:
+            table = Table(title=f"Narrative Comparison ({len(rows)} anomalies, last {days}d)")
+            table.add_column("ID", style="dim", width=6)
+            table.add_column("Sev", width=5)
+            table.add_column("Type", width=12)
+            table.add_column("Template Headline", max_width=40)
+            table.add_column("LLM Headline", max_width=40)
+            for r in rows[:30]:
+                table.add_row(
+                    str(r["id"]),
+                    f"{r['severity']:.2f}",
+                    r["type"],
+                    r["template_headline"][:40],
+                    r["llm_headline"][:40],
+                )
+            console.print(table)
+            if len(rows) > 30:
+                console.print(f"  ... and {len(rows) - 30} more. Use --format csv for full export.")
+
+    asyncio.run(_evaluate())
+
+
 if __name__ == "__main__":
     app()

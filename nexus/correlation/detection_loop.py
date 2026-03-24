@@ -1,6 +1,7 @@
 """Periodic anomaly detection loop."""
 
 import asyncio
+import json
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -190,10 +191,34 @@ class DetectionLoop(LoggerMixin):
     ) -> Counter:
         """Run CatalystAnalyzer on each new anomaly and store the result.
 
+        If ANTHROPIC_API_KEY is set, also runs the LLM narrator alongside
+        the template renderer and stores both results for A/B comparison
+        (Hypothesis C).
+
         Returns a Counter of catalyst_type values for logging.
         """
+        from nexus.core.config import settings
+        from nexus.intelligence.templates import TemplateRenderer
+
         analyzer = CatalystAnalyzer()
+        renderer = TemplateRenderer()
         counts: Counter = Counter()
+
+        # Optionally set up LLM narrator + news provider
+        llm_narrator = None
+        news_provider = None
+        if settings.anthropic_api_key:
+            try:
+                from nexus.intelligence.llm_narrator import LLMNarrator
+                from nexus.intelligence.news import NewsProvider
+
+                llm_narrator = LLMNarrator(
+                    api_key=settings.anthropic_api_key,
+                    model=settings.clustering_model,
+                )
+                news_provider = NewsProvider()
+            except Exception:
+                self.logger.debug("llm_narrator_init_failed", exc_info=True)
 
         for ctx in stored:
             try:
@@ -205,12 +230,42 @@ class DetectionLoop(LoggerMixin):
                     limit=500,
                 )
                 market = await self._store.get_market_by_id(ctx.market_id)
+                market_title = market.title if market else f"market {ctx.market_id}"
 
                 analysis = analyzer.analyze_events(
                     events, market=market, window_minutes=ctx.window_minutes
                 )
+
+                # Template narrative (always)
+                template_result = renderer.render_structured(analysis, market_title)
+
+                # LLM narrative (when available)
+                llm_result = None
+                if llm_narrator and news_provider:
+                    try:
+                        news = await news_provider.search(
+                            market_title, hours_back=6
+                        )
+                        result = await llm_narrator.narrate(
+                            analysis, market_title, news,
+                            window_minutes=ctx.window_minutes,
+                        )
+                        llm_result = result.to_dict()
+                    except Exception:
+                        self.logger.debug(
+                            "llm_narrate_failed",
+                            anomaly_id=ctx.anomaly_id,
+                            exc_info=True,
+                        )
+
+                # Store catalyst data + both narratives in metadata
+                metadata = {
+                    **analysis.to_dict(),
+                    "template_narrative": template_result,
+                    "llm_narrative": llm_result,
+                }
                 await self._store.update_anomaly_metadata(
-                    ctx.anomaly_id, analysis.to_json()
+                    ctx.anomaly_id, json.dumps(metadata)
                 )
                 counts[analysis.catalyst_type] += 1
             except Exception:
@@ -219,6 +274,15 @@ class DetectionLoop(LoggerMixin):
                     anomaly_id=ctx.anomaly_id,
                     exc_info=True,
                 )
+
+        # Cleanup
+        if news_provider:
+            await news_provider.close()
+        if llm_narrator:
+            cost = llm_narrator.get_cost_summary()
+            if cost["total_requests"] > 0:
+                self.logger.info("llm_narrator_cost", **cost)
+            await llm_narrator.close()
 
         return counts
 

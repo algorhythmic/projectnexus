@@ -62,9 +62,14 @@ export function AnomalyDetailDialog({
 
                 {anomaly.catalyst && (
                   <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/30 rounded border-2 border-blue-300 dark:border-blue-700">
-                    <p className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-1">
-                      {anomaly.catalyst.headline}
-                    </p>
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+                        {anomaly.catalyst.headline}
+                      </p>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${anomaly.catalyst.source === "llm" ? "bg-green-200 text-green-800 dark:bg-green-700 dark:text-green-200" : "bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-300"}`}>
+                        {anomaly.catalyst.source}
+                      </span>
+                    </div>
                     <p className="text-xs text-blue-800 dark:text-blue-300 mb-2">
                       {anomaly.catalyst.narrative}
                     </p>
