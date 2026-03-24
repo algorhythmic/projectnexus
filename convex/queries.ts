@@ -82,41 +82,42 @@ export const getMarketsPaginated = query({
 export const getMarketStats = query({
   args: {},
   handler: async (ctx) => {
-    // Query each platform separately with limits to stay under Convex's
-    // 32k document read and 16MB byte limits per function execution.
-    const PLATFORM_LIMIT = 10000;
+    // Cap reads to avoid scanning 30K+ docs per reactive re-run
+    // (was causing 8.71 GB/day in bandwidth).
+    const SAMPLE_LIMIT = 2000;
 
-    const kalshi = (await ctx.db
+    const kalshiSample = await ctx.db
       .query("nexusMarkets")
       .withIndex("by_platform", (q) => q.eq("platform", "kalshi"))
-      .take(PLATFORM_LIMIT)).length;
+      .take(SAMPLE_LIMIT);
 
-    const polymarket = (await ctx.db
+    const polymarketSample = await ctx.db
       .query("nexusMarkets")
       .withIndex("by_platform", (q) => q.eq("platform", "polymarket"))
-      .take(PLATFORM_LIMIT)).length;
+      .take(SAMPLE_LIMIT);
 
-    const platformCounts: Record<string, number> = { kalshi, polymarket };
-    const totalMarkets = kalshi + polymarket;
-
-    // Count active vs inactive
-    const activeMarkets = (await ctx.db
+    const activeSample = await ctx.db
       .query("nexusMarkets")
       .withIndex("by_active", (q) => q.eq("isActive", true))
-      .take(PLATFORM_LIMIT)).length;
+      .take(SAMPLE_LIMIT);
 
-    // Sample recent markets for category distribution
-    const sample = await ctx.db
-      .query("nexusMarkets")
-      .order("desc")
-      .take(500);
-
+    // Category distribution from a small sample
     const categoryCounts: Record<string, number> = {};
-    for (const m of sample) {
+    for (const m of kalshiSample) {
       categoryCounts[m.category] = (categoryCounts[m.category] || 0) + 1;
     }
 
-    return { totalMarkets, activeMarkets, platformCounts, categoryCounts };
+    return {
+      // These are lower-bound estimates with hasMore flags
+      totalMarkets: kalshiSample.length + polymarketSample.length,
+      activeMarkets: activeSample.length,
+      platformCounts: {
+        kalshi: kalshiSample.length,
+        polymarket: polymarketSample.length,
+      },
+      hasMore: kalshiSample.length >= SAMPLE_LIMIT,
+      categoryCounts,
+    };
   },
 });
 

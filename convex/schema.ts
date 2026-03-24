@@ -27,6 +27,7 @@ const applicationTables = {
     .index("by_platform", ["platform"])
     .index("by_active", ["isActive"])
     .index("by_rank", ["rankScore"])
+    .index("by_synced_at", ["syncedAt"])
     .searchIndex("search_nexus_markets", {
       searchField: "title",
       filterFields: ["platform", "category", "isActive"],

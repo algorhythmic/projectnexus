@@ -1,7 +1,7 @@
 "use client"
 
 import { ColumnDef } from "@tanstack/react-table"
-import { Doc } from "../../../convex/_generated/dataModel"
+import type { NexusMarket } from "@/types/nexus"
 import { ArrowUpDown, ExternalLink, Copy, MoreHorizontal, ChevronRight, ChevronDown } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -15,10 +15,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Checkbox } from "@/components/ui/checkbox"
 
-export type NexusMarket = Doc<"nexusMarkets">;
+export type { NexusMarket };
 
 /** Extended row type with optional grouping metadata. */
 export type MarketRow = NexusMarket & {
+  _id: string;
   _eventKey?: string;
   _groupSize?: number;
   _groupTitle?: string;
@@ -53,14 +54,14 @@ export function groupMarkets(
   const rows: MarketRow[] = [];
   for (const [key, members] of groups) {
     if (members.length === 1) {
-      rows.push({ ...members[0], _eventKey: key });
+      rows.push({ ...members[0], _id: String(members[0].marketId), _eventKey: key });
     } else {
       const isExpanded = expandedKeys.has(key);
       const groupTitle = members.find((m) => m.eventTitle)?.eventTitle || "";
       // Parent row uses synthetic _id to avoid duplicate keys
       rows.push({
         ...members[0],
-        _id: `group-${key}` as any,
+        _id: `group-${key}`,
         _eventKey: key,
         _groupSize: members.length,
         _groupTitle: groupTitle,
@@ -73,7 +74,7 @@ export function groupMarkets(
         );
         const shown = sorted.slice(0, MAX_EXPANDED_OUTCOMES);
         for (const m of shown) {
-          rows.push({ ...m, _eventKey: key, _isChild: true });
+          rows.push({ ...m, _id: String(m.marketId), _eventKey: key, _isChild: true });
         }
       }
     }

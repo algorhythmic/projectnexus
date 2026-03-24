@@ -241,12 +241,25 @@ This is a **monorepo** containing both the data pipeline (`nexus/`) and the weba
 
 ## Environment Notes
 
-- Windows 11 with Git Bash shell
-- Poetry is installed via pip, invoked as `python -m poetry` (not on PATH as bare `poetry`)
-- Poetry venvs configured as in-project (`.venv/`) to avoid Windows long-path issues
-- Python 3.13 from Microsoft Store — the `pyproject.toml` targets `^3.11`
-- `gh` CLI is NOT installed — use git commands directly for repository operations
+This is a multi-machine project. Check your local environment before assuming tool availability.
+
+### Common
+- `pyproject.toml` targets Python `^3.11`
+- Poetry for dependency management
 - Git identity: `algorhythmic` / `algorhythmic@users.noreply.github.com`
+
+### Windows (primary dev machine)
+- Windows 11, Git Bash shell
+- Python 3.13 (Microsoft Store)
+- Poetry invoked as `python -m poetry` (not on PATH directly)
+- Poetry venvs configured as in-project (`.venv/`) to avoid long-path issues
+- `gh` CLI is NOT installed — use git commands directly
+
+### macOS (secondary)
+- macOS (Darwin), zsh shell
+- Python 3.12.4 (Anaconda at `/opt/anaconda3/bin/python3`)
+- Poetry not yet installed — install with `pip install poetry` or `pipx install poetry`
+- `gh` CLI IS available (`/opt/homebrew/bin/gh`)
 
 ## Commands Reference
 

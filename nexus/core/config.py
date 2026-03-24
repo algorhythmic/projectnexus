@@ -231,7 +231,21 @@ class Settings(BaseSettings):
         description="Delete events older than N days (0 = keep forever)",
     )
 
-    # Convex Sync (Phase 4)
+    # REST API
+    api_enabled: bool = Field(
+        default=True,
+        description="Enable REST API server for broadcast data",
+    )
+    api_host: str = Field(
+        default="0.0.0.0",
+        description="REST API bind address",
+    )
+    api_port: int = Field(
+        default=8080,
+        description="REST API port",
+    )
+
+    # Convex Sync (Phase 4 — legacy, transition period)
     convex_deployment_url: str = Field(
         default="",
         description="Convex deployment URL (e.g. https://your-deployment.convex.cloud)",

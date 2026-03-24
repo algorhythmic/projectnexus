@@ -1,4 +1,4 @@
-import { Doc } from "../../../convex/_generated/dataModel";
+import type { NexusMarket } from "@/types/nexus";
 import {
   Dialog,
   DialogContent,
@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 
 interface MarketComparisonDialogProps {
-  markets: Doc<"nexusMarkets">[];
+  markets: NexusMarket[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -60,7 +60,7 @@ export function MarketComparisonDialog({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
           {markets.map((market) => (
             <div
-              key={market._id}
+              key={market.marketId}
               className="bg-white border-4 border-black shadow-[4px_4px_0px_0px_#000] rounded-lg p-4 dark:bg-gray-800 dark:shadow-[4px_4px_0px_0px_#1f2937]"
             >
               <h4 className="font-bold text-gray-900 dark:text-white text-sm mb-3 line-clamp-2">

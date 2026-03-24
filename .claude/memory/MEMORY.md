@@ -3,7 +3,6 @@
 ## Project Identity
 - Real-time prediction market intelligence engine
 - Repo: https://github.com/algorhythmic/projectnexus.git
-- Root: C:\workspace\code\projectnexus
 - Full spec: `projectnexus_specdoc.md` at repo root
 - CLAUDE.md at repo root has comprehensive project directives
 
@@ -53,21 +52,8 @@
 - Categories enriched from Kalshi events API (`_event_category_cache`), cached per process lifetime
 - Event titles stored in market description for group display in MarketFinder
 
-## Environment
-- Windows 11, Git Bash shell
-- Python 3.13 (Microsoft Store), target ^3.11
-- Poetry invoked as `python -m poetry` (not on PATH directly)
-- Poetry venvs are in-project (.venv/) to avoid Windows long-path issues
-- `gh` CLI not installed — use git directly
-- Reference repos (gitignored): `marketfinder-main/`, `marketfinder_ETL-main/`
-- MarketFinder old repo (`C:\Workspace\Code\marketfinder`) — archived, merged into monorepo
-- Convex runs from repo root (`npx convex dev --once`), webapp from `webapp/` (`npm run dev:frontend`)
-
-## Key Patterns
-- See [patterns.md](patterns.md) for code conventions
-- See [api-details.md](api-details.md) for platform API reference
-
 ## External APIs
+- [api-details.md](api-details.md) — Platform API summary (Kalshi + Polymarket)
 - [kalshi_api_reference.md](kalshi_api_reference.md) — Kalshi REST + WebSocket field names, types, and deprecation status (verified 2026-03-19)
 - [project_kalshi_api_migration.md](project_kalshi_api_migration.md) — Context on the Jan–Mar 2026 field migration and the string "0.0000" gotcha
 

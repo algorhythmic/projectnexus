@@ -1,7 +1,6 @@
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
 import { useState, useCallback } from "react";
-import { Doc } from "../../../convex/_generated/dataModel";
+import { useNexusQuery } from "@/hooks/use-nexus-query";
+import type { NexusAnomaly } from "@/types/nexus";
 import { MarketDataTable } from "./marketdatatable";
 import { anomalyColumns } from "./anomalytablecolumns";
 import { AnomalyDetailDialog } from "./AnomalyDetailDialog";
@@ -10,11 +9,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Eye, X } from "lucide-react";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -22,8 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-
-type ActiveAnomaly = Doc<"activeAnomalies">;
 
 function parseMetadata(metadata: string): Record<string, unknown> | null {
   try {
@@ -34,7 +26,7 @@ function parseMetadata(metadata: string): Record<string, unknown> | null {
 }
 
 /** Inline detail popover content for a single anomaly. */
-function AnomalyPopoverContent({ anomaly }: { anomaly: ActiveAnomaly }) {
+function AnomalyPopoverContent({ anomaly }: { anomaly: NexusAnomaly }) {
   const info = getAnomalyTypeInfo(anomaly.anomalyType);
   const Icon = info.icon;
   const parsed = parseMetadata(anomaly.metadata);
@@ -93,19 +85,23 @@ export function AnomalyFeedView() {
   const [minSeverity, setMinSeverity] = useState<number | undefined>(undefined);
   const [anomalyType, setAnomalyType] = useState<string | undefined>(undefined);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [selectedAnomalies, setSelectedAnomalies] = useState<ActiveAnomaly[]>([]);
-  const [activeAnomaly, setActiveAnomaly] = useState<ActiveAnomaly | null>(null);
+  const [selectedAnomalies, setSelectedAnomalies] = useState<NexusAnomaly[]>([]);
+  const [activeAnomaly, setActiveAnomaly] = useState<NexusAnomaly | null>(null);
 
-  const anomalies = useQuery(api.queries.getActiveAnomalies, {
-    minSeverity,
-    anomalyType,
-    limit: 100,
-  });
+  const { data: anomalies } = useNexusQuery<NexusAnomaly[]>(
+    "/api/v1/anomalies",
+    {
+      min_severity: minSeverity,
+      anomaly_type: anomalyType,
+      limit: 100,
+    },
+  );
 
-  const anomalyData: ActiveAnomaly[] = anomalies || [];
+  // Add _id for MarketDataTable row identity
+  const anomalyData = (anomalies || []).map((a) => ({ ...a, _id: String(a.anomalyId) }));
 
-  const handleRowClick = useCallback((row: ActiveAnomaly) => {
-    setActiveAnomaly((prev) => (prev?._id === row._id ? null : row));
+  const handleRowClick = useCallback((row: NexusAnomaly) => {
+    setActiveAnomaly((prev) => (prev?.anomalyId === row.anomalyId ? null : row));
   }, []);
 
   return (
@@ -193,7 +189,7 @@ export function AnomalyFeedView() {
           renderCard={(anomaly, isSelected, toggleSelected) => {
             const info = getAnomalyTypeInfo(anomaly.anomalyType);
             const Icon = info.icon;
-            const isActive = activeAnomaly?._id === anomaly._id;
+            const isActive = activeAnomaly?.anomalyId === anomaly.anomalyId;
 
             return (
               <div

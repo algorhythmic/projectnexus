@@ -1,7 +1,6 @@
-import { usePaginatedQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
 import { useState, useMemo, useCallback } from "react";
-import { Doc } from "../../../convex/_generated/dataModel";
+import { useNexusQuery } from "@/hooks/use-nexus-query";
+import type { NexusMarket, MarketsResponse } from "@/types/nexus";
 import { MarketDataTable } from "./marketdatatable";
 import { columns, groupMarkets, getEventKey, type MarketRow } from "./markettablecolumns";
 import { MarketComparisonDialog } from "./MarketComparisonDialog";
@@ -24,23 +23,26 @@ export function MarketsView() {
   const [selectedPlatform, setSelectedPlatform] = useState<string | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState("");
   const [comparisonOpen, setComparisonOpen] = useState(false);
-  const [selectedMarkets, setSelectedMarkets] = useState<Doc<"nexusMarkets">[]>([]);
+  const [selectedMarkets, setSelectedMarkets] = useState<NexusMarket[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [detailMarket, setDetailMarket] = useState<Doc<"nexusMarkets"> | null>(null);
+  const [detailMarket, setDetailMarket] = useState<NexusMarket | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [limit, setLimit] = useState(500);
 
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  const { results, status, loadMore } = usePaginatedQuery(
-    api.queries.getMarketsPaginated,
+  const { data: response, isLoading } = useNexusQuery<MarketsResponse>(
+    "/api/v1/markets",
     {
       platform: selectedPlatform,
-      searchTerm: debouncedSearchTerm || undefined,
+      search: debouncedSearchTerm || undefined,
+      limit,
+      sort: "rank_score",
     },
-    { initialNumItems: 500 },
   );
 
-  const marketData: Doc<"nexusMarkets">[] = results;
+  const marketData: NexusMarket[] = response?.markets ?? [];
+  const canLoadMore = response ? response.total > response.offset + response.limit : false;
 
   // Group multi-outcome markets by event ticker prefix
   const groupedData = useMemo(
@@ -108,7 +110,7 @@ export function MarketsView() {
       </div>
 
       {/* Loading State */}
-      {status === "LoadingFirstPage" && (
+      {isLoading && marketData.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-white"></div>
           <div className="text-center">
@@ -119,13 +121,13 @@ export function MarketsView() {
       )}
 
       {/* Market Data Table */}
-      {status !== "LoadingFirstPage" && marketData.length > 0 && (
+      {marketData.length > 0 && (
         <MarketDataTable
           columns={columns}
           data={groupedData}
           onRowClick={handleRowClick}
-          onLoadMore={status === "CanLoadMore" ? () => loadMore(500) : undefined}
-          loadMoreStatus={status}
+          onLoadMore={canLoadMore ? () => setLimit((prev) => prev + 500) : undefined}
+          loadMoreStatus={canLoadMore ? "CanLoadMore" : "Exhausted"}
           tabletHiddenColumns={["lastPrice", "category", "healthScore", "endDate", "syncedAt", "actions"]}
           renderCard={(market, isSelected, toggleSelected) => {
             const isGroup = (market._groupSize ?? 0) > 1;
@@ -221,7 +223,7 @@ export function MarketsView() {
               );
             }
 
-            // Normal single-market card (unchanged)
+            // Normal single-market card
             return (
               <div
                 className={`border-2 border-black rounded-lg p-4 shadow-[4px_4px_0px_0px_#000] transition-colors ${
@@ -308,7 +310,7 @@ export function MarketsView() {
       )}
 
       {/* No Results State */}
-      {status !== "LoadingFirstPage" && marketData.length === 0 && (
+      {!isLoading && marketData.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
           <div className="text-center">
             <h3 className="text-lg font-semibold dark:text-white">No Markets Found</h3>

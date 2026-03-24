@@ -12,7 +12,7 @@ import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 // ----------------------------------------------------------------
-// Markets — from v_current_market_state (every 30s)
+// Markets — from v_current_market_state (every 60s)
 // ----------------------------------------------------------------
 
 export const upsertMarkets = internalMutation({
@@ -145,22 +145,21 @@ export const upsertTrendingTopics = internalMutation({
 
 export const cleanupStaleMarkets = internalMutation({
   args: {
-    validMarketIds: v.array(v.number()),
+    cutoffTs: v.number(),
     batchSize: v.optional(v.number()),
   },
-  handler: async (ctx, { validMarketIds, batchSize }) => {
-    const limit = batchSize ?? 4000;
-    const validSet = new Set(validMarketIds);
-    const docs = await ctx.db.query("nexusMarkets").take(limit);
+  handler: async (ctx, { cutoffTs, batchSize }) => {
+    const limit = batchSize ?? 500;
+    // Use index to find only stale documents (syncedAt < cutoff)
+    const staleDocs = await ctx.db
+      .query("nexusMarkets")
+      .withIndex("by_synced_at", (q) => q.lt("syncedAt", cutoffTs))
+      .take(limit);
 
-    let deleted = 0;
-    for (const doc of docs) {
-      if (!validSet.has(doc.marketId)) {
-        await ctx.db.delete(doc._id);
-        deleted++;
-      }
+    for (const doc of staleDocs) {
+      await ctx.db.delete(doc._id);
     }
-    return { deleted, scanned: docs.length };
+    return { deleted: staleDocs.length };
   },
 });
 

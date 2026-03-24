@@ -1,5 +1,5 @@
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import { useNexusQuery } from "@/hooks/use-nexus-query";
+import type { NexusTopic } from "@/types/nexus";
 
 function getSeverityDot(severity: number) {
   if (severity >= 0.7) return "bg-red-500";
@@ -19,7 +19,7 @@ function timeAgo(timestamp: number) {
 }
 
 export function TrendingTopicsView() {
-  const topics = useQuery(api.queries.getTrendingTopics, { limit: 20 });
+  const { data: topics } = useNexusQuery<NexusTopic[]>("/api/v1/topics", { limit: 20 });
 
   return (
     <div className="space-y-6">
@@ -47,7 +47,7 @@ export function TrendingTopicsView() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {topics.map((topic) => (
             <div
-              key={topic._id}
+              key={topic.clusterId}
               className="bg-white border-4 border-black rounded-lg p-6 shadow-[8px_8px_0px_0px_#000] hover:shadow-[4px_4px_0px_0px_#000] hover:translate-x-[4px] hover:translate-y-[4px] transition-all dark:bg-gray-800 dark:border-black dark:shadow-[8px_8px_0px_0px_#000] dark:hover:shadow-[4px_4px_0px_0px_#000]"
             >
               <div className="flex items-start justify-between mb-3">

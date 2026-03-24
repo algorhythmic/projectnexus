@@ -1,13 +1,13 @@
 "use client"
 
 import { ColumnDef } from "@tanstack/react-table"
-import { Doc } from "../../../convex/_generated/dataModel"
+import type { NexusAnomaly } from "@/types/nexus"
 import { ArrowUpDown, TrendingDown, TrendingUp, Activity, Zap } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 
-export type ActiveAnomaly = Doc<"activeAnomalies">;
+export type ActiveAnomaly = NexusAnomaly;
 
 const sortableHeaderClass =
   "font-bold text-black dark:text-white hover:text-black dark:hover:text-black hover:bg-yellow-300 border-2 border-black shadow-[2px_2px_0px_0px_#000] hover:shadow-[4px_4px_0px_0px_#000]"

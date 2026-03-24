@@ -1,5 +1,5 @@
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import { useNexusQuery } from "@/hooks/use-nexus-query";
+import type { MarketStats, AnomalyStats, NexusAnomaly, NexusTopic, SyncStatus } from "@/types/nexus";
 
 function formatTimeAgo(timestamp: number | null) {
   if (!timestamp) return "Never";
@@ -18,20 +18,17 @@ interface DashboardOverviewProps {
 }
 
 export function DashboardOverview({ onViewChange }: DashboardOverviewProps) {
-  const marketStats = useQuery(api.queries.getMarketStats);
-  const anomalyStats = useQuery(api.queries.getAnomalyStats);
-  const recentAnomalies = useQuery(api.queries.getActiveAnomalies, { limit: 5 });
-  const trendingTopics = useQuery(api.queries.getTrendingTopics, { limit: 5 });
-  const syncStatus = useQuery(api.queries.getSyncStatus);
+  const { data: marketStats } = useNexusQuery<MarketStats>("/api/v1/markets/stats");
+  const { data: anomalyStats } = useNexusQuery<AnomalyStats>("/api/v1/anomalies/stats");
+  const { data: recentAnomalies } = useNexusQuery<NexusAnomaly[]>("/api/v1/anomalies", { limit: 5 });
+  const { data: trendingTopics } = useNexusQuery<NexusTopic[]>("/api/v1/topics", { limit: 5 });
+  const { data: syncStatus } = useNexusQuery<SyncStatus>("/api/v1/status", undefined, { pollingInterval: 10_000 });
 
   const isLoading = marketStats === undefined || anomalyStats === undefined;
 
   const lastSync = syncStatus
     ? Math.max(
-        syncStatus.nexusMarkets ?? 0,
-        syncStatus.activeAnomalies ?? 0,
-        syncStatus.trendingTopics ?? 0,
-        syncStatus.marketSummaries ?? 0
+        ...Object.values(syncStatus).map((s) => s.lastRefresh ?? 0)
       )
     : null;
 
@@ -113,7 +110,7 @@ export function DashboardOverview({ onViewChange }: DashboardOverviewProps) {
             <div className="space-y-3">
               {recentAnomalies.map((anomaly) => (
                 <div
-                  key={anomaly._id}
+                  key={anomaly.anomalyId}
                   className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border-2 border-black shadow-[4px_4px_0px_0px_#000] dark:bg-gray-700 dark:border-black dark:shadow-[4px_4px_0px_0px_#000] cursor-pointer hover:bg-yellow-50 hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all dark:hover:bg-gray-600"
                   onClick={() => onViewChange("anomalies")}
                 >
@@ -164,7 +161,7 @@ export function DashboardOverview({ onViewChange }: DashboardOverviewProps) {
             <div className="space-y-3">
               {trendingTopics.map((topic, index) => (
                 <div
-                  key={topic._id}
+                  key={topic.clusterId}
                   className="flex items-start space-x-3 p-3 bg-gray-50 rounded border-2 border-black dark:bg-gray-700 dark:border-black cursor-pointer hover:bg-yellow-50 hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all dark:hover:bg-gray-600"
                   onClick={() => onViewChange("topics")}
                 >
@@ -201,25 +198,28 @@ export function DashboardOverview({ onViewChange }: DashboardOverviewProps) {
           {syncStatus ? (
             <>
               {([
-                { name: "Markets", key: "nexusMarkets" as const },
-                { name: "Anomalies", key: "activeAnomalies" as const },
-                { name: "Topics", key: "trendingTopics" as const },
-                { name: "Summaries", key: "marketSummaries" as const },
-              ] as const).map((table) => (
-                <div key={table.key} className="flex items-center space-x-3 p-4 bg-gray-50 rounded-lg border-2 border-black shadow-[2px_2px_0px_0px_#000] dark:bg-gray-700 dark:border-black dark:shadow-[2px_2px_0px_0px_#000]">
-                  <div className={`w-4 h-4 rounded-full border-2 border-black ${
-                    syncStatus[table.key] ? "bg-green-400" : "bg-gray-400"
-                  }`} />
-                  <div className="flex-1">
-                    <p className="font-bold text-gray-900 dark:text-white">{table.name}</p>
-                    <p className="text-xs text-gray-500 font-medium dark:text-gray-400">
-                      {syncStatus[table.key]
-                        ? `Last sync: ${formatTimeAgo(syncStatus[table.key])}`
-                        : "Never synced"}
-                    </p>
+                { name: "Markets", key: "markets" },
+                { name: "Anomalies", key: "anomalies" },
+                { name: "Topics", key: "topics" },
+                { name: "Summaries", key: "summaries" },
+              ] as const).map((table) => {
+                const entry = syncStatus[table.key];
+                return (
+                  <div key={table.key} className="flex items-center space-x-3 p-4 bg-gray-50 rounded-lg border-2 border-black shadow-[2px_2px_0px_0px_#000] dark:bg-gray-700 dark:border-black dark:shadow-[2px_2px_0px_0px_#000]">
+                    <div className={`w-4 h-4 rounded-full border-2 border-black ${
+                      entry ? "bg-green-400" : "bg-gray-400"
+                    }`} />
+                    <div className="flex-1">
+                      <p className="font-bold text-gray-900 dark:text-white">{table.name}</p>
+                      <p className="text-xs text-gray-500 font-medium dark:text-gray-400">
+                        {entry
+                          ? `Last sync: ${formatTimeAgo(entry.lastRefresh)}`
+                          : "Never synced"}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </>
           ) : (
             <div className="col-span-4 text-center py-4">

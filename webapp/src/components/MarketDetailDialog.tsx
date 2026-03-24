@@ -1,14 +1,13 @@
 /**
  * MarketDetailDialog — shows market info + candlestick chart for a single market.
  *
- * Opens when clicking a market row in MarketsView.  Fetches candlestick data
- * from the Convex caching proxy (which in turn fetches from Kalshi's public API).
+ * Opens when clicking a market row in MarketsView. Fetches candlestick data
+ * from the Nexus REST API.
  */
 
 import { useState } from "react";
-import { useAction } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Doc } from "../../../convex/_generated/dataModel";
+import { nexusFetch } from "@/lib/nexus-api";
+import type { NexusMarket, Candle } from "@/types/nexus";
 import {
   Dialog,
   DialogContent,
@@ -21,18 +20,9 @@ import { CandlestickChart } from "./CandlestickChart";
 import { ExternalLink, BarChart3, Clock, TrendingUp, Activity } from "lucide-react";
 
 interface MarketDetailDialogProps {
-  market: Doc<"nexusMarkets"> | null;
+  market: NexusMarket | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}
-
-interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
 }
 
 function formatPrice(price: number | null | undefined) {
@@ -71,7 +61,6 @@ export function MarketDetailDialog({
   open,
   onOpenChange,
 }: MarketDetailDialogProps) {
-  const getCandlesticks = useAction(api.candlesticks.getCandlesticks);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
@@ -95,7 +84,10 @@ export function MarketDetailDialog({
     setChartLoading(true);
     setChartError(null);
     try {
-      const result = await getCandlesticks({ ticker, periodInterval: 60 });
+      const result = await nexusFetch<Candle[]>(
+        `/api/v1/candlesticks/${ticker}`,
+        { period: 60 },
+      );
       setCandles(result ?? []);
       setChartLoaded(true);
     } catch (err) {

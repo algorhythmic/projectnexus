@@ -1,9 +1,9 @@
 # Platform API Reference
 
 ## Kalshi
-- Production: `https://trading-api.kalshi.com/trade-api/v2`
-- Demo: `https://demo-api.kalshi.com/trade-api/v2`
-- WebSocket: `wss://trading-api.kalshi.com/trade-api/ws/v2`
+- Production: `https://api.elections.kalshi.com/trade-api/v2`
+- Demo: `https://demo-api.kalshi.co/trade-api/v2`
+- WebSocket: `wss://api.elections.kalshi.com/trade-api/ws/v2`
 - Auth: RSA-PSS SHA-256, message = `timestamp_ms + METHOD + path`
 - Headers: KALSHI-ACCESS-KEY, KALSHI-ACCESS-TIMESTAMP, KALSHI-ACCESS-SIGNATURE
 - Rate limits (Basic): 20 reads/sec, 10 writes/sec — we use 15/sec

@@ -176,8 +176,9 @@ def run(
     platform: str = typer.Option("all", "--platform", help="Platform: kalshi, polymarket, or all"),
     no_sync: bool = typer.Option(False, "--no-sync", help="Disable Convex sync"),
     no_detect: bool = typer.Option(False, "--no-detect", help="Disable anomaly detection"),
+    no_api: bool = typer.Option(False, "--no-api", help="Disable REST API server"),
 ) -> None:
-    """Start the full Nexus pipeline (ingestion + detection + sync)."""
+    """Start the full Nexus pipeline (ingestion + detection + sync + API)."""
     from nexus.ingestion.bus import EventBus
     from nexus.ingestion.manager import IngestionManager
     from nexus.ingestion.metrics import MetricsCollector
@@ -228,29 +229,36 @@ def run(
 
         health_tracker = MarketHealthTracker()
 
-        # Optionally build sync layer
+        # Build broadcast cache for REST API
+        from nexus.api.cache import BroadcastCache
+
+        broadcast_cache = BroadcastCache()
+
+        # Optionally build sync layer (cache always, Convex optionally)
         sync_layer = None
         convex_client = None
-        if (
-            not no_sync
-            and settings.store_backend == "postgres"
-            and settings.convex_deployment_url
-            and settings.convex_deploy_key
-        ):
+        if not no_sync and settings.store_backend == "postgres":
             from nexus.sync import ConvexClient, SyncLayer
 
-            convex_client = ConvexClient(
-                deployment_url=settings.convex_deployment_url,
-                deploy_key=settings.convex_deploy_key,
-            )
+            # Convex is optional — only if credentials are configured
+            if settings.convex_deployment_url and settings.convex_deploy_key:
+                convex_client = ConvexClient(
+                    deployment_url=settings.convex_deployment_url,
+                    deploy_key=settings.convex_deploy_key,
+                )
+
             sync_layer = SyncLayer(
                 store=store,
                 convex=convex_client,
+                cache=broadcast_cache,
                 market_interval=settings.sync_market_interval_seconds,
                 summary_interval=settings.sync_summary_interval_seconds,
                 topics_interval=settings.sync_topics_interval_seconds,
                 health_tracker=health_tracker,
             )
+
+        # Build API server flag
+        api_enabled = settings.api_enabled and not no_api
 
         # Status summary
         components = ["ingestion"]
@@ -259,6 +267,8 @@ def run(
         if sync_layer:
             components.append("sync")
         components.append("health")
+        if api_enabled:
+            components.append(f"api:{settings.api_port}")
         console.print(
             f"Starting Nexus ({', '.join(components)}). "
             f"{len(adapters)} adapter(s), discovery every "
@@ -288,6 +298,25 @@ def run(
                     if sync_layer:
                         tg.create_task(
                             sync_layer.run_forever(), name="sync"
+                        )
+                    if api_enabled:
+                        from nexus.api.server import run_api_server
+
+                        # Find the Kalshi adapter for candlestick fallback
+                        kalshi_adapter = next(
+                            (a for a in adapters if hasattr(a, "get_candlesticks")),
+                            None,
+                        )
+                        tg.create_task(
+                            run_api_server(
+                                cache=broadcast_cache,
+                                store=store,
+                                health_tracker=health_tracker,
+                                kalshi_adapter=kalshi_adapter,
+                                host=settings.api_host,
+                                port=settings.api_port,
+                            ),
+                            name="api",
                         )
             except* Exception as eg:
                 for exc in eg.exceptions:

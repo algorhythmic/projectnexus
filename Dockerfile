@@ -40,4 +40,6 @@ COPY sql/ sql/
 RUN useradd --create-home nexus
 USER nexus
 
+EXPOSE 8080
+
 CMD ["python", "-m", "nexus.cli", "run"]

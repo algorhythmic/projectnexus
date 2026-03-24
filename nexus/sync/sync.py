@@ -1,26 +1,27 @@
-"""PostgreSQL-to-Convex sync layer (Phase 4, Milestone 4.1).
+"""PostgreSQL data refresh and sync layer.
 
-Reads from PostgreSQL materialized views and pushes precomputed
-summaries to Convex tables. Supports both scheduled sync (markets,
-summaries, topics) and event-driven sync (anomalies).
+Reads from PostgreSQL materialized views and:
+  1. Populates an in-memory BroadcastCache for the REST API (primary)
+  2. Optionally pushes to Convex tables (legacy, transition period)
 """
 
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
+from nexus.api.cache import BroadcastCache
 from nexus.core.logging import LoggerMixin
 from nexus.sync.convex_client import ConvexClient
 
 
 class SyncLayer(LoggerMixin):
-    """Orchestrates PostgreSQL → Convex data synchronization.
+    """Orchestrates PostgreSQL → BroadcastCache (+ optional Convex) sync.
 
-    Sync targets (from spec Section 8.4):
-        markets          ← v_current_market_state    (every 30s)
-        activeAnomalies  ← v_active_anomalies        (event-driven / 30s)
-        trendingTopics   ← v_trending_topics          (every 5min)
-        marketSummaries  ← v_market_summaries         (every 2min)
+    Sync targets:
+        markets          ← v_current_market_state    (every 60s)
+        activeAnomalies  ← v_active_anomalies        (every 60s)
+        trendingTopics   ← v_trending_topics          (every 10min)
+        marketSummaries  ← v_market_summaries         (every 5min)
 
     If a ``health_tracker`` is provided, the market sync merges in
     computed health scores from the in-memory intelligence engine.
@@ -29,14 +30,16 @@ class SyncLayer(LoggerMixin):
     def __init__(
         self,
         store: Any,  # PostgresStore with view query methods
-        convex: ConvexClient,
-        market_interval: int = 30,
-        summary_interval: int = 120,
-        topics_interval: int = 300,
+        convex: Optional[ConvexClient] = None,
+        cache: Optional[BroadcastCache] = None,
+        market_interval: int = 60,
+        summary_interval: int = 300,
+        topics_interval: int = 600,
         health_tracker: Any = None,  # MarketHealthTracker
     ) -> None:
         self._store = store
         self._convex = convex
+        self._cache = cache
         self._market_interval = market_interval
         self._summary_interval = summary_interval
         self._topics_interval = topics_interval
@@ -52,7 +55,7 @@ class SyncLayer(LoggerMixin):
     SYNC_BATCH_SIZE = 500
 
     async def sync_markets(self) -> int:
-        """Push current market state to Convex. Returns record count.
+        """Refresh market data into cache (+ optional Convex). Returns count.
 
         Only syncs markets that have received at least one event (price
         or volume) to avoid pushing 144K+ discovered-but-untracked markets.
@@ -94,42 +97,56 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        for i in range(0, len(records), self.SYNC_BATCH_SIZE):
-            batch = records[i : i + self.SYNC_BATCH_SIZE]
-            await self._convex.mutation(
-                "nexusSync:upsertMarkets", {"markets": batch}
+        # Primary: update BroadcastCache
+        if self._cache is not None:
+            self._cache.update("markets", records, max_age=30)
+            self._cache.update(
+                "market_stats",
+                BroadcastCache.compute_market_stats(records),
+                max_age=30,
             )
+
+        # Legacy: push to Convex (transition period)
+        if self._convex is not None:
+            for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+                batch = records[i : i + self.SYNC_BATCH_SIZE]
+                await self._convex.mutation(
+                    "nexusSync:upsertMarkets", {"markets": batch}
+                )
+
+            # Periodically clean up stale Convex documents (every 10 min)
+            now = time.time()
+            if now - self._last_cleanup >= 600:
+                await self._cleanup_stale_markets()
+                self._last_cleanup = now
+
         self.logger.info("sync_markets", count=len(records))
-
-        # Periodically clean up stale Convex documents (every 5 min)
-        now = time.time()
-        if now - self._last_cleanup >= 300:
-            valid_ids = [r["marketId"] for r in records]
-            await self._cleanup_stale_markets(valid_ids)
-            self._last_cleanup = now
-
         return len(records)
 
-    async def _cleanup_stale_markets(self, valid_ids: List[int]) -> int:
-        """Remove Convex nexusMarkets docs not in the valid set.
+    async def _cleanup_stale_markets(self) -> int:
+        """Remove Convex nexusMarkets docs with old syncedAt timestamps.
 
-        Loops with batchSize=4000 until all records have been scanned,
-        staying under Convex's 32K read limit per mutation.
+        Uses a timestamp cutoff (10 minutes ago) so documents not refreshed
+        by recent sync cycles get cleaned up. Processes in small batches
+        to minimize reactive query amplification.
         """
+        if self._convex is None:
+            return 0
+
+        cutoff_ts = int((time.time() - 600) * 1000)  # 10 min ago
         total_deleted = 0
-        batch_size = 4000
+        batch_size = 200  # Small batches to limit reactive fan-out
 
         while True:
             result = await self._convex.mutation(
                 "nexusSync:cleanupStaleMarkets",
-                {"validMarketIds": valid_ids, "batchSize": batch_size},
+                {"cutoffTs": cutoff_ts, "batchSize": batch_size},
             )
             deleted = result.get("deleted", 0) if result else 0
-            scanned = result.get("scanned", 0) if result else 0
             total_deleted += deleted
 
-            if scanned < batch_size:
-                break  # All records checked
+            if deleted < batch_size:
+                break  # No more stale documents
 
         if total_deleted > 0:
             self.logger.info(
@@ -138,7 +155,7 @@ class SyncLayer(LoggerMixin):
         return total_deleted
 
     async def sync_anomalies(self) -> int:
-        """Push active anomalies to Convex. Returns record count."""
+        """Refresh anomaly data into cache (+ optional Convex). Returns count."""
         rows = await self._store.query_active_anomalies()
 
         records = [
@@ -156,14 +173,26 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        await self._convex.mutation(
-            "nexusSync:upsertAnomalies", {"anomalies": records}
-        )
+        # Primary: update BroadcastCache
+        if self._cache is not None:
+            self._cache.update("anomalies", records, max_age=30)
+            self._cache.update(
+                "anomaly_stats",
+                BroadcastCache.compute_anomaly_stats(records),
+                max_age=30,
+            )
+
+        # Legacy: push to Convex
+        if self._convex is not None:
+            await self._convex.mutation(
+                "nexusSync:upsertAnomalies", {"anomalies": records}
+            )
+
         self.logger.info("sync_anomalies", count=len(records))
         return len(records)
 
     async def sync_trending_topics(self) -> int:
-        """Push trending topics to Convex. Returns record count."""
+        """Refresh topic data into cache (+ optional Convex). Returns count."""
         rows = await self._store.query_trending_topics()
         if not rows:
             return 0
@@ -181,14 +210,21 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        await self._convex.mutation(
-            "nexusSync:upsertTrendingTopics", {"topics": records}
-        )
+        # Primary: update BroadcastCache
+        if self._cache is not None:
+            self._cache.update("topics", records, max_age=120)
+
+        # Legacy: push to Convex
+        if self._convex is not None:
+            await self._convex.mutation(
+                "nexusSync:upsertTrendingTopics", {"topics": records}
+            )
+
         self.logger.info("sync_trending_topics", count=len(records))
         return len(records)
 
     async def sync_market_summaries(self) -> int:
-        """Push market summaries to Convex. Returns record count."""
+        """Refresh market summaries into cache (+ optional Convex). Returns count."""
         rows = await self._store.query_market_summaries()
         if not rows:
             return 0
@@ -207,11 +243,19 @@ class SyncLayer(LoggerMixin):
             for r in rows
         ]
 
-        for i in range(0, len(records), self.SYNC_BATCH_SIZE):
-            batch = records[i : i + self.SYNC_BATCH_SIZE]
-            await self._convex.mutation(
-                "nexusSync:upsertMarketSummaries", {"summaries": batch}
-            )
+        # Primary: update BroadcastCache (summaries not currently served
+        # via REST but kept for future use / sync_status)
+        if self._cache is not None:
+            self._cache.update("summaries", records, max_age=120)
+
+        # Legacy: push to Convex
+        if self._convex is not None:
+            for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+                batch = records[i : i + self.SYNC_BATCH_SIZE]
+                await self._convex.mutation(
+                    "nexusSync:upsertMarketSummaries", {"summaries": batch}
+                )
+
         self.logger.info("sync_market_summaries", count=len(records))
         return len(records)
 
@@ -266,14 +310,14 @@ class SyncLayer(LoggerMixin):
                     await self.sync_anomalies()
                     last_market = now
 
-                # Market summaries (every 30 min by default)
+                # Market summaries (every 5 min)
                 if now - last_summary >= self._summary_interval:
                     if hasattr(self._store, "refresh_view"):
                         await self._store.refresh_view("v_market_summaries")
                     await self.sync_market_summaries()
                     last_summary = now
 
-                # Trending topics + hourly activity (low-priority, every 5 min)
+                # Trending topics + hourly activity (every 10 min)
                 if now - last_topics >= self._topics_interval:
                     if hasattr(self._store, "refresh_view"):
                         await self._store.refresh_view("v_trending_topics")

@@ -1,4 +1,4 @@
-import { Doc } from "../../../convex/_generated/dataModel";
+import type { NexusAnomaly } from "@/types/nexus";
 import { getSeverityStyle } from "./anomalytablecolumns";
 import {
   Dialog,
@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 
 interface AnomalyDetailDialogProps {
-  anomalies: Doc<"activeAnomalies">[];
+  anomalies: NexusAnomaly[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -44,7 +44,7 @@ export function AnomalyDetailDialog({
             const parsed = parseMetadata(anomaly.metadata);
             return (
               <div
-                key={anomaly._id}
+                key={anomaly.anomalyId}
                 className="bg-white border-4 border-black shadow-[4px_4px_0px_0px_#000] rounded-lg p-4 dark:bg-gray-800 dark:shadow-[4px_4px_0px_0px_#1f2937]"
               >
                 <div className="flex items-start justify-between mb-3">
