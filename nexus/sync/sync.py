@@ -36,6 +36,7 @@ class SyncLayer(LoggerMixin):
         summary_interval: int = 300,
         topics_interval: int = 600,
         health_tracker: Any = None,  # MarketHealthTracker
+        alert_creator: Any = None,  # AlertCreator (optional)
     ) -> None:
         self._store = store
         self._cache = cache
@@ -43,6 +44,7 @@ class SyncLayer(LoggerMixin):
         self._summary_interval = summary_interval
         self._topics_interval = topics_interval
         self._health_tracker = health_tracker
+        self._alert_creator = alert_creator
         self._running = False
 
     # ------------------------------------------------------------------
@@ -129,6 +131,13 @@ class SyncLayer(LoggerMixin):
             BroadcastCache.compute_anomaly_stats(records),
             max_age=30,
         )
+
+        # Route new anomalies to per-user alerts (non-blocking)
+        if self._alert_creator is not None and records:
+            try:
+                await self._alert_creator.process_new_anomalies(records)
+            except Exception:
+                self.logger.debug("alert_processing_failed", exc_info=True)
 
         self.logger.info("sync_anomalies", count=len(records))
         return len(records)

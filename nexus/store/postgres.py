@@ -890,6 +890,14 @@ class PostgresStore(BaseStore, LoggerMixin):
             )
         return [self._row_to_market(r) for r in rows]
 
+    async def count_unassigned_markets(self) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """SELECT COUNT(*) FROM markets m
+                   LEFT JOIN market_cluster_memberships mcm ON m.id = mcm.market_id
+                   WHERE m.is_active = TRUE AND mcm.market_id IS NULL"""
+            )
+
     # ------------------------------------------------------------------
     # Cross-platform links (Milestone 3.3)
     # ------------------------------------------------------------------

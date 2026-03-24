@@ -671,6 +671,15 @@ class SQLiteStore(BaseStore, LoggerMixin):
         rows = await cursor.fetchall()
         return [self._row_to_market(r) for r in rows]
 
+    async def count_unassigned_markets(self) -> int:
+        cursor = await self.db.execute(
+            """SELECT COUNT(*) FROM markets m
+               LEFT JOIN market_cluster_memberships mcm ON m.id = mcm.market_id
+               WHERE m.is_active = 1 AND mcm.market_id IS NULL"""
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
     # ------------------------------------------------------------------
     # Cross-platform links (Milestone 3.3)
     # ------------------------------------------------------------------

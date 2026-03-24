@@ -51,6 +51,10 @@ class DetectionLoop(LoggerMixin):
         # Start from 10 minutes ago (not 0) to avoid scanning all
         # historical markets on first cycle — prevents OOM on restart
         self._last_cycle_ts: int = int(time.time() * 1000) - 600_000
+        # Incremental clustering: run every 6 hours if API key is set
+        self._last_cluster_ts: float = 0.0
+        self._cluster_interval: float = 6 * 3600  # 6 hours
+        self._cluster_min_unassigned: int = 10
 
     async def run_once(self) -> int:
         """Run a single detection cycle. Returns anomaly count."""
@@ -151,6 +155,9 @@ class DetectionLoop(LoggerMixin):
             if pruned > 0:
                 self.logger.info("events_pruned", count=pruned)
 
+        # Incremental topic clustering (every 6h if ANTHROPIC_API_KEY set)
+        await self._maybe_run_clustering()
+
         thresholds = {
             "price": self._window_configs[0].price_change_threshold,
             "volume": self._window_configs[0].volume_spike_multiplier,
@@ -214,6 +221,46 @@ class DetectionLoop(LoggerMixin):
                 )
 
         return counts
+
+    async def _maybe_run_clustering(self) -> None:
+        """Run incremental topic clustering if due and API key is available."""
+        from nexus.core.config import settings
+
+        if not settings.anthropic_api_key:
+            return
+
+        now = time.time()
+        if now - self._last_cluster_ts < self._cluster_interval:
+            return
+
+        try:
+            unassigned = await self._store.count_unassigned_markets()
+            if unassigned < self._cluster_min_unassigned:
+                return
+
+            self.logger.info(
+                "clustering_start",
+                unassigned_markets=unassigned,
+            )
+
+            from nexus.clustering.clusterer import TopicClusterer
+            from nexus.clustering.llm_client import ClaudeClient
+
+            client = ClaudeClient(settings)
+            clusterer = TopicClusterer(self._store, client, settings)
+            assigned = await clusterer.incremental_cluster()
+            cost = client.get_cost_summary()
+            await client.close()
+
+            self._last_cluster_ts = now
+            self.logger.info(
+                "clustering_complete",
+                assignments=assigned,
+                cost_usd=cost["total_cost_usd"],
+                llm_calls=cost["total_requests"],
+            )
+        except Exception:
+            self.logger.exception("clustering_error")
 
     async def run_forever(self) -> None:
         """Run detection cycles at the configured interval."""

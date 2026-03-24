@@ -249,6 +249,11 @@ class BaseStore(ABC):
         """Get active markets not in any cluster."""
         ...
 
+    @abstractmethod
+    async def count_unassigned_markets(self) -> int:
+        """Count active markets not in any cluster."""
+        ...
+
     # ------------------------------------------------------------------
     # Cross-platform links (Milestone 3.3)
     # ------------------------------------------------------------------

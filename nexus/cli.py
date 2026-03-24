@@ -234,6 +234,15 @@ def run(
 
         broadcast_cache = BroadcastCache()
 
+        # Build alert creator (optional — needs Convex credentials)
+        alert_creator = None
+        if settings.convex_url and settings.convex_deploy_key:
+            from nexus.alerts.creator import AlertCreator
+            from nexus.sync.convex_client import ConvexClient
+
+            convex = ConvexClient(settings.convex_url, settings.convex_deploy_key)
+            alert_creator = AlertCreator(convex)
+
         # Build sync layer (refreshes PG views → BroadcastCache)
         sync_layer = None
         if not no_sync and settings.store_backend == "postgres":
@@ -246,6 +255,7 @@ def run(
                 summary_interval=settings.sync_summary_interval_seconds,
                 topics_interval=settings.sync_topics_interval_seconds,
                 health_tracker=health_tracker,
+                alert_creator=alert_creator,
             )
 
         # Build API server flag
@@ -258,6 +268,8 @@ def run(
         if sync_layer:
             components.append("sync")
         components.append("health")
+        if alert_creator:
+            components.append("alerts")
         if api_enabled:
             components.append(f"api:{settings.api_port}")
         console.print(
