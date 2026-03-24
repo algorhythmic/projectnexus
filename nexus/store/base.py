@@ -187,6 +187,13 @@ class BaseStore(ABC):
         ...
 
     @abstractmethod
+    async def update_anomaly_metadata(
+        self, anomaly_id: int, metadata: str
+    ) -> None:
+        """Update the metadata JSON string for an anomaly."""
+        ...
+
+    @abstractmethod
     async def get_markets_with_active_anomalies(self) -> set[int]:
         """Get IDs of all markets that have at least one active anomaly."""
         ...

@@ -570,6 +570,15 @@ class SQLiteStore(BaseStore, LoggerMixin):
         )
         await self.db.commit()
 
+    async def update_anomaly_metadata(
+        self, anomaly_id: int, metadata: str
+    ) -> None:
+        await self.db.execute(
+            "UPDATE anomalies SET metadata = ? WHERE id = ?",
+            (metadata, anomaly_id),
+        )
+        await self.db.commit()
+
     async def get_markets_with_active_anomalies(self) -> set[int]:
         """Get IDs of all markets that have at least one active anomaly."""
         cursor = await self.db.execute(

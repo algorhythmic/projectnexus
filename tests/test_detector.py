@@ -170,11 +170,14 @@ class TestAnomalyDetector:
 
         wc = WindowComputer(tmp_store)
         detector = AnomalyDetector(tmp_store, wc, baseline_hours=1)
-        count = await detector.detect_and_store(
+        stored_ctx = await detector.detect_and_store(
             [mid], [_default_config(10)], now
         )
 
-        assert count >= 1
+        assert len(stored_ctx) >= 1
+        # Each context has anomaly_id, market_id, window_minutes
+        assert stored_ctx[0].anomaly_id > 0
+        assert stored_ctx[0].market_id == mid
         stored = await tmp_store.get_anomalies()
         assert len(stored) >= 1
 

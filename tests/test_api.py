@@ -78,6 +78,14 @@ SAMPLE_ANOMALIES = [
         "summary": "BTC-UP-100 +5.2% in 15min",
         "metadata": "{}",
         "clusterName": "Crypto",
+        "catalyst": {
+            "headline": "Large trades drove BTC-UP-100 surged 5.2%",
+            "narrative": "BTC surged on whale activity.",
+            "catalyst_type": "whale",
+            "confidence": 0.65,
+            "signals": ["62% whale volume", "5 trades"],
+            "source": "template",
+        },
         "syncedAt": 1710900000000,
     },
     {
@@ -89,6 +97,7 @@ SAMPLE_ANOMALIES = [
         "summary": "Politics cluster activity",
         "metadata": "{}",
         "clusterName": "US Politics",
+        "catalyst": None,
         "syncedAt": 1710900000000,
     },
 ]

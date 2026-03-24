@@ -776,6 +776,16 @@ class PostgresStore(BaseStore, LoggerMixin):
                 anomaly_id,
             )
 
+    async def update_anomaly_metadata(
+        self, anomaly_id: int, metadata: str
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE anomalies SET metadata = $1 WHERE id = $2",
+                metadata,
+                anomaly_id,
+            )
+
     async def get_markets_with_active_anomalies(self) -> set[int]:
         """Get IDs of all markets that have at least one active anomaly."""
         async with self.pool.acquire() as conn:

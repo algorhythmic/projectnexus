@@ -3,7 +3,7 @@
 import math
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import (
@@ -14,6 +14,14 @@ from nexus.core.types import (
 )
 from nexus.correlation.windows import WindowComputer
 from nexus.store.base import BaseStore
+
+
+class StoredAnomalyContext(NamedTuple):
+    """Context returned by detect_and_store for each stored anomaly."""
+
+    anomaly_id: int
+    market_id: int
+    window_minutes: int
 
 
 class AnomalyDetector(LoggerMixin):
@@ -131,8 +139,12 @@ class AnomalyDetector(LoggerMixin):
         market_ids: List[int],
         window_configs: List[WindowConfig],
         now_ms: int,
-    ) -> int:
-        """Detect anomalies and store them. Returns count of anomalies stored.
+    ) -> List[StoredAnomalyContext]:
+        """Detect anomalies and store them.
+
+        Returns a list of :class:`StoredAnomalyContext` for each anomaly
+        stored (anomaly_id, market_id, window_minutes) so callers can
+        enrich them with catalyst analysis.
 
         Deduplicates: only stores the highest-severity anomaly per market
         (across all windows) to avoid flooding with repeated alerts.
@@ -140,7 +152,7 @@ class AnomalyDetector(LoggerMixin):
         # Single query to find markets with existing active anomalies
         existing_market_ids = await self._store.get_markets_with_active_anomalies()
 
-        count = 0
+        stored: List[StoredAnomalyContext] = []
         for mid in market_ids:
             if mid in existing_market_ids:
                 continue
@@ -149,34 +161,36 @@ class AnomalyDetector(LoggerMixin):
                 continue
             # Only store the highest-severity anomaly per market
             anomaly = max(anomalies, key=lambda a: a.severity)
-            anomalies = [anomaly]
-            for anomaly in anomalies:
-                # Compute price_delta and volume_ratio for market links
-                wm = self._parse_window_minutes(anomaly.summary or "")
-                price_delta = None
-                volume_ratio = None
-                if wm is not None:
-                    stats = await self._wc.compute_window(mid, wm, now_ms)
-                    price_delta = stats.price_delta
-                    if stats.volume_total > 0:
-                        baseline = await self._wc.compute_baseline(
-                            mid, "volume", self._baseline_hours, wm, now_ms
+            # Compute price_delta and volume_ratio for market links
+            wm = self._parse_window_minutes(anomaly.summary or "")
+            price_delta = None
+            volume_ratio = None
+            if wm is not None:
+                stats = await self._wc.compute_window(mid, wm, now_ms)
+                price_delta = stats.price_delta
+                if stats.volume_total > 0:
+                    baseline = await self._wc.compute_baseline(
+                        mid, "volume", self._baseline_hours, wm, now_ms
+                    )
+                    if baseline.mean > 0:
+                        volume_ratio = round(
+                            stats.volume_total / baseline.mean, 2
                         )
-                        if baseline.mean > 0:
-                            volume_ratio = round(
-                                stats.volume_total / baseline.mean, 2
-                            )
 
-                links = [AnomalyMarketRecord(
-                    anomaly_id=0,
-                    market_id=mid,
-                    price_delta=price_delta,
-                    volume_ratio=volume_ratio,
-                )]
-                await self._store.insert_anomaly(anomaly, links)
-                count += 1
+            links = [AnomalyMarketRecord(
+                anomaly_id=0,
+                market_id=mid,
+                price_delta=price_delta,
+                volume_ratio=volume_ratio,
+            )]
+            anomaly_id = await self._store.insert_anomaly(anomaly, links)
+            stored.append(StoredAnomalyContext(
+                anomaly_id=anomaly_id,
+                market_id=mid,
+                window_minutes=wm or window_configs[0].window_minutes,
+            ))
 
-        return count
+        return stored
 
     async def _get_market_title(self, market_id: int) -> str:
         """Look up market title, with caching to avoid repeated DB hits."""

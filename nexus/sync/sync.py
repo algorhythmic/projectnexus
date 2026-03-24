@@ -5,11 +5,14 @@ BroadcastCache that the Starlette REST API serves to clients.
 """
 
 import asyncio
+import json
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from nexus.api.cache import BroadcastCache
 from nexus.core.logging import LoggerMixin
+from nexus.intelligence.narrative import CatalystAnalysis
+from nexus.intelligence.templates import TemplateRenderer
 
 
 class SyncLayer(LoggerMixin):
@@ -95,9 +98,11 @@ class SyncLayer(LoggerMixin):
     async def sync_anomalies(self) -> int:
         """Refresh anomaly data into cache. Returns record count."""
         rows = await self._store.query_active_anomalies()
+        renderer = TemplateRenderer()
 
-        records = [
-            {
+        records = []
+        for r in rows:
+            record: Dict[str, Any] = {
                 "anomalyId": r["anomaly_id"],
                 "anomalyType": r["anomaly_type"],
                 "severity": float(r["severity"]),
@@ -107,9 +112,16 @@ class SyncLayer(LoggerMixin):
                 "metadata": r.get("metadata") or "",
                 "clusterName": r.get("cluster_name") or "",
                 "syncedAt": int(time.time() * 1000),
+                "catalyst": None,
             }
-            for r in rows
-        ]
+
+            # If metadata contains catalyst analysis, render it
+            catalyst = self._parse_catalyst(r.get("metadata"), r.get("summary") or "")
+            if catalyst is not None:
+                title = (r.get("summary") or "").split(":")[0].strip()
+                record["catalyst"] = renderer.render_structured(catalyst, title)
+
+            records.append(record)
 
         self._cache.update("anomalies", records, max_age=30)
         self._cache.update(
@@ -183,6 +195,43 @@ class SyncLayer(LoggerMixin):
 
         self.logger.info("sync_all_complete", **results)
         return results
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_catalyst(metadata_str: Optional[str], summary: str) -> Optional[CatalystAnalysis]:
+        """Try to parse CatalystAnalysis from anomaly metadata JSON."""
+        if not metadata_str:
+            return None
+        try:
+            data = json.loads(metadata_str)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        # CatalystAnalysis metadata has a 'catalyst_type' key
+        if not isinstance(data, dict) or "catalyst_type" not in data:
+            return None
+        return CatalystAnalysis(
+            direction=data.get("direction", "unknown"),
+            magnitude_pct=data.get("magnitude_pct", 0.0),
+            price_from=data.get("price_from"),
+            price_to=data.get("price_to"),
+            trade_count=data.get("trade_count", 0),
+            trades_per_minute=data.get("trades_per_minute", 0.0),
+            whale_trade_pct=data.get("whale_trade_pct", 0.0),
+            taker_buy_pct=data.get("taker_buy_pct", 0.0),
+            avg_trade_size=data.get("avg_trade_size", 0.0),
+            burst_detected=data.get("burst_detected", False),
+            burst_duration_seconds=data.get("burst_duration_seconds", 0.0),
+            burst_trade_pct=data.get("burst_trade_pct", 0.0),
+            category=data.get("category", ""),
+            series_prefix=data.get("series_prefix", ""),
+            hours_to_expiry=data.get("hours_to_expiry"),
+            markets_in_series=data.get("markets_in_series", 0),
+            confidence=data.get("confidence", 0.0),
+            catalyst_type=data.get("catalyst_type", "unknown"),
+        )
 
     # ------------------------------------------------------------------
     # Continuous refresh loop

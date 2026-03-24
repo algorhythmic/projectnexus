@@ -49,10 +49,30 @@ function AnomalyPopoverContent({ anomaly }: { anomaly: NexusAnomaly }) {
         {info.description}
       </p>
 
-      {/* Summary */}
-      <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">
-        {anomaly.summary}
-      </p>
+      {/* Catalyst narrative (if available) or plain summary */}
+      {anomaly.catalyst ? (
+        <div className="space-y-1">
+          <p className="text-sm text-gray-800 dark:text-gray-200 font-semibold">
+            {anomaly.catalyst.headline}
+          </p>
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            {anomaly.catalyst.narrative}
+          </p>
+          {anomaly.catalyst.signals.length > 0 && (
+            <div className="flex flex-wrap gap-1 pt-1">
+              {anomaly.catalyst.signals.map((signal, i) => (
+                <span key={i} className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-200 border border-blue-300 dark:border-blue-600">
+                  {signal}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">
+          {anomaly.summary}
+        </p>
+      )}
 
       {/* Details grid */}
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -68,8 +88,8 @@ function AnomalyPopoverContent({ anomaly }: { anomaly: NexusAnomaly }) {
         </div>
       </div>
 
-      {/* Metadata */}
-      {parsed && (
+      {/* Raw metadata fallback (only when no catalyst) */}
+      {!anomaly.catalyst && parsed && (
         <div className="pt-2 border-t border-gray-200 dark:border-gray-600">
           <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase block mb-1">Details</span>
           <pre className="text-xs bg-gray-100 dark:bg-gray-700 p-2 rounded border border-black overflow-x-auto max-h-28 dark:text-gray-300">

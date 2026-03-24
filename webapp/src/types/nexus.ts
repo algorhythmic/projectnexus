@@ -24,6 +24,15 @@ export interface NexusMarket {
   syncedAt: number;
 }
 
+export interface CatalystInfo {
+  headline: string;
+  narrative: string;
+  catalyst_type: string;
+  confidence: number;
+  signals: string[];
+  source: "template" | "llm";
+}
+
 export interface NexusAnomaly {
   anomalyId: number;
   anomalyType: string;
@@ -33,6 +42,7 @@ export interface NexusAnomaly {
   summary: string;
   metadata: string;
   clusterName: string;
+  catalyst?: CatalystInfo | null;
   syncedAt: number;
 }
 

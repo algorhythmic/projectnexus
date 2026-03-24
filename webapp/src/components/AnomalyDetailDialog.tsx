@@ -60,6 +60,26 @@ export function AnomalyDetailDialog({
                   {anomaly.summary}
                 </p>
 
+                {anomaly.catalyst && (
+                  <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/30 rounded border-2 border-blue-300 dark:border-blue-700">
+                    <p className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-1">
+                      {anomaly.catalyst.headline}
+                    </p>
+                    <p className="text-xs text-blue-800 dark:text-blue-300 mb-2">
+                      {anomaly.catalyst.narrative}
+                    </p>
+                    {anomaly.catalyst.signals.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {anomaly.catalyst.signals.map((signal, i) => (
+                          <span key={i} className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-200 border border-blue-300 dark:border-blue-600">
+                            {signal}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-gray-500 uppercase dark:text-gray-400">Type</span>
@@ -67,6 +87,15 @@ export function AnomalyDetailDialog({
                       {anomaly.anomalyType.replace(/_/g, " ")}
                     </span>
                   </div>
+
+                  {anomaly.catalyst && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-500 uppercase dark:text-gray-400">Catalyst</span>
+                      <span className="px-2 py-0.5 rounded border border-black text-xs font-bold uppercase bg-orange-200 text-orange-800 dark:bg-orange-700 dark:text-orange-200">
+                        {anomaly.catalyst.catalyst_type} ({(anomaly.catalyst.confidence * 100).toFixed(0)}%)
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-gray-500 uppercase dark:text-gray-400">Markets</span>
@@ -80,7 +109,7 @@ export function AnomalyDetailDialog({
                     </span>
                   </div>
 
-                  {parsed && (
+                  {parsed && !anomaly.catalyst && (
                     <div className="pt-2 border-t border-gray-200 dark:border-gray-600">
                       <span className="text-xs font-bold text-gray-500 uppercase dark:text-gray-400 block mb-1">Metadata</span>
                       <pre className="text-xs bg-gray-100 dark:bg-gray-700 p-2 rounded border border-black overflow-x-auto max-h-32 dark:text-gray-300">

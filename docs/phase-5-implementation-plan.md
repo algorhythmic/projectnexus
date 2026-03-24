@@ -49,6 +49,12 @@ This plan covers the remaining work to validate the spec's three hypotheses and 
 
 **Duration:** 1–2 days active work + 7 days observation.
 
+**Status (verified 2026-03-23):**
+- Step 5.0.1 DONE — Fly.io REST API live at `https://projectnexus.fly.dev` (3,959 markets, 823 anomalies)
+- Step 5.0.2 DONE — Webapp live at `https://marketfinder.daviddunn.dev` (Vite build, wired to Fly.io API)
+- Step 5.0.3 DONE — Convex `deafening-starling-749` serving auth + per-user features
+- Step 5.0.4 IN PROGRESS — 7-day stability observation starts now
+
 ### Step 5.0.1 — Deploy REST API to Fly.io
 
 **What:** Deploy the updated Fly.io image with the REST API server.

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -9,10 +10,11 @@ from nexus.core.logging import LoggerMixin
 from nexus.core.types import WindowConfig
 from nexus.correlation.correlator import ClusterCorrelator
 from nexus.correlation.cross_platform import CrossPlatformCorrelator
-from nexus.correlation.detector import AnomalyDetector
+from nexus.correlation.detector import AnomalyDetector, StoredAnomalyContext
 from nexus.correlation.series_detector import SeriesPatternDetector
 from nexus.correlation.windows import WindowComputer
 from nexus.ingestion.health import _get_rss_mb
+from nexus.intelligence.narrative import CatalystAnalyzer
 from nexus.store.base import BaseStore
 
 
@@ -96,9 +98,17 @@ class DetectionLoop(LoggerMixin):
             self._store, wc, baseline_hours=self._baseline_hours
         )
 
-        count = await detector.detect_and_store(
+        stored_anomalies = await detector.detect_and_store(
             market_ids, self._window_configs, now_ms
         )
+        count = len(stored_anomalies)
+
+        # Enrich new anomalies with catalyst analysis
+        catalyst_counts: Counter = Counter()
+        if stored_anomalies:
+            catalyst_counts = await self._enrich_with_catalyst(
+                stored_anomalies, now_ms
+            )
 
         # Run cluster correlation if enabled
         cluster_count = 0
@@ -159,11 +169,51 @@ class DetectionLoop(LoggerMixin):
             cluster_anomalies=cluster_count,
             series_anomalies=series_count,
             cross_platform_anomalies=xplat_count,
+            catalyst_types=dict(catalyst_counts) if catalyst_counts else {},
             events_pruned=pruned,
             thresholds=thresholds,
             **rss_extra,
         )
         return count + cluster_count + series_count + xplat_count
+
+    async def _enrich_with_catalyst(
+        self,
+        stored: List[StoredAnomalyContext],
+        now_ms: int,
+    ) -> Counter:
+        """Run CatalystAnalyzer on each new anomaly and store the result.
+
+        Returns a Counter of catalyst_type values for logging.
+        """
+        analyzer = CatalystAnalyzer()
+        counts: Counter = Counter()
+
+        for ctx in stored:
+            try:
+                # Fetch events in the anomaly's window
+                window_start = now_ms - (ctx.window_minutes * 60 * 1000)
+                events = await self._store.get_events(
+                    market_id=ctx.market_id,
+                    since=window_start,
+                    limit=500,
+                )
+                market = await self._store.get_market_by_id(ctx.market_id)
+
+                analysis = analyzer.analyze_events(
+                    events, market=market, window_minutes=ctx.window_minutes
+                )
+                await self._store.update_anomaly_metadata(
+                    ctx.anomaly_id, analysis.to_json()
+                )
+                counts[analysis.catalyst_type] += 1
+            except Exception:
+                self.logger.debug(
+                    "catalyst_enrichment_failed",
+                    anomaly_id=ctx.anomaly_id,
+                    exc_info=True,
+                )
+
+        return counts
 
     async def run_forever(self) -> None:
         """Run detection cycles at the configured interval."""
