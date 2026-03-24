@@ -3,96 +3,9 @@ import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
 
 const applicationTables = {
-  // ── Nexus sync targets (populated by Nexus sync layer) ──────────
-
-  nexusMarkets: defineTable({
-    marketId: v.number(),
-    platform: v.string(),
-    externalId: v.string(),
-    title: v.string(),
-    eventTitle: v.optional(v.string()),
-    category: v.string(),
-    endDate: v.optional(v.union(v.string(), v.null())),
-    isActive: v.boolean(),
-    lastPrice: v.optional(v.union(v.number(), v.null())),
-    lastPriceTs: v.optional(v.union(v.number(), v.null())),
-    lastVolume: v.optional(v.union(v.number(), v.null())),
-    lastVolumeTs: v.optional(v.union(v.number(), v.null())),
-    volume: v.optional(v.number()),
-    rankScore: v.optional(v.number()),
-    healthScore: v.optional(v.union(v.number(), v.null())),
-    syncedAt: v.number(),
-  })
-    .index("by_nexus_id", ["marketId"])
-    .index("by_platform", ["platform"])
-    .index("by_active", ["isActive"])
-    .index("by_rank", ["rankScore"])
-    .index("by_synced_at", ["syncedAt"])
-    .searchIndex("search_nexus_markets", {
-      searchField: "title",
-      filterFields: ["platform", "category", "isActive"],
-    }),
-
-  activeAnomalies: defineTable({
-    anomalyId: v.number(),
-    anomalyType: v.string(),
-    severity: v.number(),
-    marketCount: v.number(),
-    detectedAt: v.number(),
-    summary: v.string(),
-    metadata: v.string(),
-    clusterName: v.string(),
-    syncedAt: v.number(),
-  })
-    .index("by_anomaly_id", ["anomalyId"])
-    .index("by_severity", ["severity"])
-    .index("by_detected_at", ["detectedAt"])
-    .index("by_type", ["anomalyType"]),
-
-  trendingTopics: defineTable({
-    clusterId: v.number(),
-    name: v.string(),
-    description: v.string(),
-    marketCount: v.number(),
-    anomalyCount: v.number(),
-    maxSeverity: v.number(),
-    syncedAt: v.number(),
-  })
-    .index("by_cluster_id", ["clusterId"])
-    .index("by_anomaly_count", ["anomalyCount"]),
-
-  marketSummaries: defineTable({
-    marketId: v.number(),
-    platform: v.string(),
-    title: v.string(),
-    category: v.string(),
-    eventCount: v.number(),
-    firstEventTs: v.optional(v.union(v.number(), v.null())),
-    lastEventTs: v.optional(v.union(v.number(), v.null())),
-    syncedAt: v.number(),
-  })
-    .index("by_market_id", ["marketId"])
-    .index("by_platform", ["platform"]),
-
-  // ── Candlestick cache (on-demand, fetched by Convex action) ────
-
-  candlestickCache: defineTable({
-    ticker: v.string(),
-    periodInterval: v.number(),
-    candles: v.array(
-      v.object({
-        time: v.number(),
-        open: v.number(),
-        high: v.number(),
-        low: v.number(),
-        close: v.number(),
-        volume: v.number(),
-      })
-    ),
-    fetchedAt: v.number(),
-  }).index("by_ticker_period", ["ticker", "periodInterval"]),
-
   // ── Webapp-owned tables ─────────────────────────────────────────
+  // Broadcast data (markets, anomalies, topics) is served by the
+  // Nexus REST API — not stored in Convex.
 
   users: defineTable({
     name: v.optional(v.string()),

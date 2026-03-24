@@ -234,22 +234,13 @@ def run(
 
         broadcast_cache = BroadcastCache()
 
-        # Optionally build sync layer (cache always, Convex optionally)
+        # Build sync layer (refreshes PG views → BroadcastCache)
         sync_layer = None
-        convex_client = None
         if not no_sync and settings.store_backend == "postgres":
-            from nexus.sync import ConvexClient, SyncLayer
-
-            # Convex is optional — only if credentials are configured
-            if settings.convex_deployment_url and settings.convex_deploy_key:
-                convex_client = ConvexClient(
-                    deployment_url=settings.convex_deployment_url,
-                    deploy_key=settings.convex_deploy_key,
-                )
+            from nexus.sync import SyncLayer
 
             sync_layer = SyncLayer(
                 store=store,
-                convex=convex_client,
                 cache=broadcast_cache,
                 market_interval=settings.sync_market_interval_seconds,
                 summary_interval=settings.sync_summary_interval_seconds,
@@ -332,8 +323,6 @@ def run(
                 if sync_layer:
                     await sync_layer.stop()
 
-        if convex_client:
-            await convex_client.close()
         await bus.stop()
         snap = metrics.snapshot()
         console.print(
