@@ -106,19 +106,22 @@ class SyncLayer(LoggerMixin):
                 max_age=30,
             )
 
-        # Legacy: push to Convex (transition period)
+        # Legacy: push to Convex (transition period, errors are non-fatal)
         if self._convex is not None:
-            for i in range(0, len(records), self.SYNC_BATCH_SIZE):
-                batch = records[i : i + self.SYNC_BATCH_SIZE]
-                await self._convex.mutation(
-                    "nexusSync:upsertMarkets", {"markets": batch}
-                )
+            try:
+                for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+                    batch = records[i : i + self.SYNC_BATCH_SIZE]
+                    await self._convex.mutation(
+                        "nexusSync:upsertMarkets", {"markets": batch}
+                    )
 
-            # Periodically clean up stale Convex documents (every 10 min)
-            now = time.time()
-            if now - self._last_cleanup >= 600:
-                await self._cleanup_stale_markets()
-                self._last_cleanup = now
+                # Periodically clean up stale Convex documents (every 10 min)
+                now = time.time()
+                if now - self._last_cleanup >= 600:
+                    await self._cleanup_stale_markets()
+                    self._last_cleanup = now
+            except Exception:
+                self.logger.warning("convex_sync_markets_failed")
 
         self.logger.info("sync_markets", count=len(records))
         return len(records)
@@ -182,11 +185,14 @@ class SyncLayer(LoggerMixin):
                 max_age=30,
             )
 
-        # Legacy: push to Convex
+        # Legacy: push to Convex (errors are non-fatal)
         if self._convex is not None:
-            await self._convex.mutation(
-                "nexusSync:upsertAnomalies", {"anomalies": records}
-            )
+            try:
+                await self._convex.mutation(
+                    "nexusSync:upsertAnomalies", {"anomalies": records}
+                )
+            except Exception:
+                self.logger.warning("convex_sync_anomalies_failed")
 
         self.logger.info("sync_anomalies", count=len(records))
         return len(records)
@@ -214,11 +220,14 @@ class SyncLayer(LoggerMixin):
         if self._cache is not None:
             self._cache.update("topics", records, max_age=120)
 
-        # Legacy: push to Convex
+        # Legacy: push to Convex (errors are non-fatal)
         if self._convex is not None:
-            await self._convex.mutation(
-                "nexusSync:upsertTrendingTopics", {"topics": records}
-            )
+            try:
+                await self._convex.mutation(
+                    "nexusSync:upsertTrendingTopics", {"topics": records}
+                )
+            except Exception:
+                self.logger.warning("convex_sync_topics_failed")
 
         self.logger.info("sync_trending_topics", count=len(records))
         return len(records)
@@ -248,13 +257,16 @@ class SyncLayer(LoggerMixin):
         if self._cache is not None:
             self._cache.update("summaries", records, max_age=120)
 
-        # Legacy: push to Convex
+        # Legacy: push to Convex (errors are non-fatal)
         if self._convex is not None:
-            for i in range(0, len(records), self.SYNC_BATCH_SIZE):
-                batch = records[i : i + self.SYNC_BATCH_SIZE]
-                await self._convex.mutation(
-                    "nexusSync:upsertMarketSummaries", {"summaries": batch}
-                )
+            try:
+                for i in range(0, len(records), self.SYNC_BATCH_SIZE):
+                    batch = records[i : i + self.SYNC_BATCH_SIZE]
+                    await self._convex.mutation(
+                        "nexusSync:upsertMarketSummaries", {"summaries": batch}
+                    )
+            except Exception:
+                self.logger.warning("convex_sync_summaries_failed")
 
         self.logger.info("sync_market_summaries", count=len(records))
         return len(records)
