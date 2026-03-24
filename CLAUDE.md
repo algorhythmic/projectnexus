@@ -49,10 +49,13 @@ The full specification is in `projectnexus_specdoc.md` at the repo root. Always 
 - Category taxonomy, single market lookup, orderbook depth, trade flow, milestones REST methods
 - Backtest CLI (`nexus backtest` replays detection against historical data)
 
-**Next milestones:**
-- Verify OOM fixes hold during peak hours (check `rss_mb` in fly logs 9:30 AM–8 PM ET)
-- Run initial topic clustering (`nexus cluster`) to enable trending topics (requires ANTHROPIC_API_KEY)
-- Phase 5: LLM narrative layer (catalyst attribution foundation is ready)
+**Next milestones (see `docs/phase-5-implementation-plan.md` for full details):**
+
+- **Milestone 5.0 — Deploy & Validate:** Deploy REST API (`fly deploy`), webapp (Vercel), Convex schema (`npx convex dev --once`). Run 7-day stability observation to validate Hypothesis A baselines and verify OOM fixes hold during peak hours.
+- **Milestone 5.1 — Template Alerts:** Wire `CatalystAnalyzer` into `DetectionLoop` (currently unconnected). Build template renderer (`nexus/intelligence/templates.py`) to produce human-readable narratives from structured catalyst data. Enrich `/api/v1/anomalies` response with `catalyst` field. This is the **control condition** for Hypothesis C.
+- **Milestone 5.2 — Topics & Alert Pipeline:** Run initial topic clustering (`nexus cluster`, requires `ANTHROPIC_API_KEY`). Add incremental re-clustering trigger in detection loop (every 6h). Build alert creation bridge: Python → Convex `alerts` table, matching anomalies to user preferences.
+- **Milestone 5.3 — LLM Narrative:** Integrate news API (Google News RSS). Build Claude-powered narrative generator (`nexus/intelligence/llm_narrator.py`). Run template + LLM in parallel for A/B comparison. Add `nexus evaluate` CLI command.
+- **Milestone 5.4 — Hypothesis Evaluation:** Formal evaluation of Hypotheses A (stability), B (signal quality: <50 alerts/day, >60% real catalysts), C (LLM preferred 70%+ over templates). Track 2 decision gate.
 
 ## Repository Layout (Monorepo)
 

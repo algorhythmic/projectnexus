@@ -1,5 +1,7 @@
 # Milestone 4.2 — MarketFinder Webapp Updates
 
+> **STATUS: COMPLETED & SUPERSEDED.** Milestone 4.2 was completed, then the Convex sync architecture was replaced by a REST API (2026-03-23). See `docs/phase-5-implementation-plan.md` for the current roadmap.
+
 ## Context
 
 Nexus (Python) is deployed to Fly.io, ingesting data from Kalshi and Polymarket, running anomaly detection, topic clustering, and cross-platform correlation. The sync layer pushes precomputed data from PostgreSQL views to Convex every 30s-5min via HTTP API.
