@@ -9,11 +9,8 @@
  */
 
 import type * as auth from "../auth.js";
-import type * as candlesticks from "../candlesticks.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
-import type * as nexusSync from "../nexusSync.js";
-import type * as queries from "../queries.js";
 import type * as router from "../router.js";
 import type * as users from "../users.js";
 
@@ -25,11 +22,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
-  candlesticks: typeof candlesticks;
   crons: typeof crons;
   http: typeof http;
-  nexusSync: typeof nexusSync;
-  queries: typeof queries;
   router: typeof router;
   users: typeof users;
 }>;
