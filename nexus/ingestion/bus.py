@@ -18,6 +18,7 @@ from nexus.store.base import BaseStore
 
 if TYPE_CHECKING:
     from nexus.ingestion.metrics import MetricsCollector
+    from nexus.ingestion.ring_buffer import EventRingBuffer
 
 
 class EventBus(LoggerMixin):
@@ -39,6 +40,7 @@ class EventBus(LoggerMixin):
         batch_size: int = 100,
         batch_timeout: float = 1.0,
         metrics: Optional[MetricsCollector] = None,
+        ring_buffer: Optional[EventRingBuffer] = None,
     ) -> None:
         self._store = store
         self._queue: asyncio.Queue[EventRecord] = asyncio.Queue(maxsize=max_size)
@@ -48,6 +50,7 @@ class EventBus(LoggerMixin):
         self._shutdown = asyncio.Event()
         self._events_written = 0
         self._metrics = metrics
+        self._ring_buffer = ring_buffer
 
     @property
     def events_written(self) -> int:
@@ -129,7 +132,12 @@ class EventBus(LoggerMixin):
         return batch
 
     async def _write_batch(self, batch: List[EventRecord]) -> None:
-        """Write a batch of events to the store."""
+        """Write a batch of events to the store (and ring buffer if configured)."""
+        # Shadow write: feed into ring buffer for real-time analysis
+        if self._ring_buffer is not None:
+            self._ring_buffer.add_batch(batch)
+            self._ring_buffer.maybe_cleanup()
+
         try:
             count = await self._store.insert_events(batch)
             self._events_written += count

@@ -190,12 +190,22 @@ def run(
 
         metrics = MetricsCollector()
 
+        # Build ring buffer for in-memory event analysis
+        from nexus.ingestion.ring_buffer import EventRingBuffer
+
+        ring_buffer = EventRingBuffer(
+            max_age_seconds=settings.ring_buffer_max_age_seconds,
+            max_events_per_market=settings.ring_buffer_max_events,
+            cleanup_interval_seconds=settings.ring_buffer_cleanup_interval,
+        )
+
         bus = EventBus(
             store=store,
             max_size=settings.event_queue_max_size,
             batch_size=settings.event_batch_size,
             batch_timeout=settings.event_batch_timeout,
             metrics=metrics,
+            ring_buffer=ring_buffer,
         )
         bus.start()
 
@@ -316,6 +326,7 @@ def run(
                                 store=store,
                                 health_tracker=health_tracker,
                                 kalshi_adapter=kalshi_adapter,
+                                ring_buffer=ring_buffer,
                                 host=settings.api_host,
                                 port=settings.api_port,
                             ),

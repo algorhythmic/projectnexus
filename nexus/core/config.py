@@ -151,6 +151,17 @@ class Settings(BaseSettings):
         default=1.0, description="Max seconds before flushing partial batch"
     )
 
+    # Ring Buffer (in-memory event buffer for real-time analysis)
+    ring_buffer_max_age_seconds: int = Field(
+        default=86400, description="Max event age in ring buffer (seconds, default 24h)"
+    )
+    ring_buffer_max_events: int = Field(
+        default=2000, description="Max events per market in ring buffer"
+    )
+    ring_buffer_cleanup_interval: int = Field(
+        default=300, description="Seconds between ring buffer expiry sweeps"
+    )
+
     # Monitoring
     health_report_interval_seconds: int = Field(
         default=60, description="Seconds between health report log entries"

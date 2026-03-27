@@ -16,6 +16,7 @@ async def run_api_server(
     store: Any = None,
     health_tracker: Any = None,
     kalshi_adapter: Any = None,
+    ring_buffer: Any = None,
     host: str = "0.0.0.0",
     port: int = 8080,
 ) -> None:
@@ -29,6 +30,7 @@ async def run_api_server(
         store=store,
         health_tracker=health_tracker,
         kalshi_adapter=kalshi_adapter,
+        ring_buffer=ring_buffer,
     )
     config = uvicorn.Config(
         app,

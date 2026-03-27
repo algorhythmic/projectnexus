@@ -234,7 +234,22 @@ async def get_candlesticks(request: Request) -> Response:
 
 async def get_status(request: Request) -> Response:
     cache: BroadcastCache = request.app.state.cache
-    return _json_response(cache.get_status(), max_age=10)
+    status = cache.get_status()
+
+    # Include ring buffer stats if available
+    ring_buffer = getattr(request.app.state, "ring_buffer", None)
+    if ring_buffer is not None:
+        stats = ring_buffer.get_stats()
+        status["ring_buffer"] = {
+            "total_events": stats.total_events,
+            "total_markets": stats.total_markets,
+            "memory_estimate_mb": stats.memory_estimate_mb,
+            "oldest_event_age_seconds": round(stats.oldest_event_age_seconds),
+            "events_added_total": stats.events_added_total,
+            "events_expired_total": stats.events_expired_total,
+        }
+
+    return _json_response(status, max_age=10)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +261,7 @@ def create_app(
     store: Any = None,
     health_tracker: Any = None,
     kalshi_adapter: Any = None,
+    ring_buffer: Any = None,
 ) -> Starlette:
     """Create the Starlette application with all routes."""
     routes = [
@@ -272,4 +288,5 @@ def create_app(
     app.state.store = store
     app.state.health_tracker = health_tracker
     app.state.kalshi_adapter = kalshi_adapter
+    app.state.ring_buffer = ring_buffer
     return app
