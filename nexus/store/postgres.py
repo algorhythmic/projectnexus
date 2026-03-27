@@ -1208,6 +1208,79 @@ class PostgresStore(BaseStore, LoggerMixin):
         return [self._row_to_market(r) for r in rows]
 
     # ------------------------------------------------------------------
+    # Candle operations
+    # ------------------------------------------------------------------
+
+    async def insert_candles(self, candles: list) -> int:
+        """Upsert pre-computed OHLCV candles. Uses REPLACE semantics on conflict."""
+        if not candles:
+            return 0
+
+        query = """
+            INSERT INTO candles (market_id, interval, open_ts, close_ts,
+                                 open, high, low, close, volume, trade_count)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (market_id, interval, open_ts) DO UPDATE SET
+                close_ts = EXCLUDED.close_ts,
+                high = GREATEST(candles.high, EXCLUDED.high),
+                low = LEAST(candles.low, EXCLUDED.low),
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume,
+                trade_count = EXCLUDED.trade_count
+        """
+
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                query,
+                [
+                    (
+                        c["market_id"], c["interval"], c["open_ts"], c["close_ts"],
+                        c["open"], c["high"], c["low"], c["close"],
+                        c["volume"], c["trade_count"],
+                    )
+                    for c in candles
+                ],
+            )
+
+        return len(candles)
+
+    async def get_candles(
+        self,
+        market_id: int,
+        interval: str = "1m",
+        since_ts: int | None = None,
+        limit: int = 500,
+    ) -> list:
+        """Retrieve OHLCV candles for a market, newest first."""
+        params: list = [market_id, interval]
+        query = """
+            SELECT market_id, interval, open_ts, close_ts,
+                   open, high, low, close, volume, trade_count
+            FROM candles
+            WHERE market_id = $1 AND interval = $2
+        """
+
+        if since_ts is not None:
+            query += " AND open_ts >= $3"
+            params.append(since_ts)
+
+        query += " ORDER BY open_ts DESC LIMIT $" + str(len(params) + 1)
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
+
+    async def purge_old_candles(self, older_than_ts: int) -> int:
+        """Delete candles older than the given timestamp."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM candles WHERE created_at < $1", older_than_ts
+            )
+        return int(result.split()[-1])
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

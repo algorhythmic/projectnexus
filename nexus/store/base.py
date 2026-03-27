@@ -360,6 +360,28 @@ class BaseStore(ABC):
         """
         return []
 
+    # ------------------------------------------------------------------
+    # Candle operations (Step 3 of event-stream migration)
+    # ------------------------------------------------------------------
+
+    async def insert_candles(self, candles: List[dict]) -> int:
+        """Upsert pre-computed OHLCV candles. Returns rows upserted."""
+        return 0  # Default no-op for SQLite
+
+    async def get_candles(
+        self,
+        market_id: int,
+        interval: str = "1m",
+        since_ts: Optional[int] = None,
+        limit: int = 500,
+    ) -> List[dict]:
+        """Retrieve OHLCV candles for a market, newest first."""
+        return []  # Default no-op for SQLite
+
+    async def purge_old_candles(self, older_than_ts: int) -> int:
+        """Delete candles older than the given timestamp. Returns rows deleted."""
+        return 0  # Default no-op for SQLite
+
     @abstractmethod
     async def close(self) -> None:
         """Close the database connection."""

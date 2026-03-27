@@ -298,9 +298,19 @@ def run(
                 health_tracker=health_tracker,
             )
 
+            # Build candle aggregator (ring buffer → candles table)
+            from nexus.ingestion.candle_aggregator import CandleAggregator
+
+            candle_aggregator = CandleAggregator(
+                ring_buffer=ring_buffer,
+                store=store,
+                flush_interval_seconds=30,
+            )
+
             try:
                 async with asyncio.TaskGroup() as tg:
                     tg.create_task(manager.run(), name="ingestion")
+                    tg.create_task(candle_aggregator.run(), name="candles")
                     if detection_loop:
                         tg.create_task(
                             _delayed_detection(
