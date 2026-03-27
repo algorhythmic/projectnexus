@@ -1,6 +1,19 @@
 # Event Stream Architecture Migration
 
+**Status: COMPLETE (2026-03-27).** Steps 0–6 deployed and verified. Step 7 (event archive) deferred — use Tigris/R2 if needed later.
+
 **Objective:** Eliminate raw `price_change` event writes to PostgreSQL by introducing an in-memory ring buffer and pre-computed candle aggregation. Reduces PG writes by ~97%, keeps storage growth flat regardless of platform count, and requires zero new infrastructure.
+
+**Results:**
+| Metric | Before | After |
+|---|---|---|
+| PG writes/day | ~487,000 | ~50,000 |
+| DB size | 746 MB | 38 MB |
+| Events table | 685 MB | 5 MB |
+| Storage growth/month | 3.5 GB | ~360 MB |
+| Detection data source | PostgreSQL (network I/O) | In-memory ring buffer (zero latency) |
+| Candlestick source | SQL aggregation over raw events | Pre-computed `candles` table |
+| Supabase tier | Over 500 MB limit | 38 MB, months of headroom |
 
 **Prerequisites:** Familiarity with the current codebase as described in `CLAUDE.md`. All new modules follow existing patterns: `LoggerMixin`, `Settings` singleton, Pydantic models in `nexus/core/types.py`, `pytest-asyncio` for tests.
 
