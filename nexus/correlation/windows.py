@@ -1,18 +1,31 @@
-"""Sliding window computation over the event store."""
+"""Sliding window computation over the event store or ring buffer."""
 
 import statistics
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from nexus.core.logging import LoggerMixin
 from nexus.core.types import EventType, HistoricalBaseline, WindowStats
 from nexus.store.base import BaseStore
 
+if TYPE_CHECKING:
+    from nexus.ingestion.ring_buffer import EventRingBuffer
+
 
 class WindowComputer(LoggerMixin):
-    """Computes windowed statistics for a market over the event store."""
+    """Computes windowed statistics for a market.
 
-    def __init__(self, store: BaseStore) -> None:
+    Reads from an in-memory ring buffer when available (zero latency).
+    Falls back to the PostgreSQL store when the buffer is empty
+    (cold start, or events predate the buffer's max_age).
+    """
+
+    def __init__(
+        self,
+        store: BaseStore,
+        ring_buffer: Optional["EventRingBuffer"] = None,
+    ) -> None:
         self._store = store
+        self._ring_buffer = ring_buffer
 
     async def compute_window(
         self, market_id: int, window_minutes: int, now_ms: int
@@ -21,11 +34,52 @@ class WindowComputer(LoggerMixin):
         window_start = now_ms - (window_minutes * 60 * 1000)
         window_end = now_ms
 
-        # Price events
+        # Try ring buffer first (zero-latency, in-memory)
+        if self._ring_buffer is not None:
+            price_events = self._ring_buffer.get_events(
+                market_id, since_ts=window_start, event_type=EventType.PRICE_CHANGE
+            )
+            trade_events = self._ring_buffer.get_events(
+                market_id, since_ts=window_start, event_type=EventType.TRADE
+            )
+            volume_events = self._ring_buffer.get_events(
+                market_id, since_ts=window_start, event_type=EventType.VOLUME_UPDATE
+            )
+
+            # Use buffer data if we have any events at all
+            if price_events or trade_events or volume_events:
+                return self._build_stats(
+                    market_id, window_minutes, window_start, window_end,
+                    price_events, trade_events, volume_events,
+                )
+
+        # Fallback to PostgreSQL (cold start or buffer miss)
         price_events = await self._store.get_events_in_window(
             market_id, EventType.PRICE_CHANGE.value, window_start, window_end
         )
+        trade_events = await self._store.get_events_in_window(
+            market_id, EventType.TRADE.value, window_start, window_end
+        )
+        volume_events = await self._store.get_events_in_window(
+            market_id, EventType.VOLUME_UPDATE.value, window_start, window_end
+        )
 
+        return self._build_stats(
+            market_id, window_minutes, window_start, window_end,
+            price_events, trade_events, volume_events,
+        )
+
+    @staticmethod
+    def _build_stats(
+        market_id: int,
+        window_minutes: int,
+        window_start: int,
+        window_end: int,
+        price_events: list,
+        trade_events: list,
+        volume_events: list,
+    ) -> WindowStats:
+        """Build WindowStats from event lists (works for both buffer and PG events)."""
         price_start: Optional[float] = None
         price_end: Optional[float] = None
         price_delta: Optional[float] = None
@@ -38,18 +92,9 @@ class WindowComputer(LoggerMixin):
             if price_start != 0:
                 price_change_pct = price_delta / price_start
 
-        # Trade events
-        trade_events = await self._store.get_events_in_window(
-            market_id, EventType.TRADE.value, window_start, window_end
-        )
         trade_count = len(trade_events)
 
-        # Volume events
-        volume_events = await self._store.get_events_in_window(
-            market_id, EventType.VOLUME_UPDATE.value, window_start, window_end
-        )
         volume_total = sum(e.new_value for e in volume_events)
-
         # If no volume events, use trade count as proxy
         if not volume_events and trade_count > 0:
             volume_total = float(trade_count)

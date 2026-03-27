@@ -232,6 +232,7 @@ def run(
                 cross_platform_enabled=settings.cross_platform_enabled,
                 cross_platform_window_minutes=settings.cross_platform_window_minutes,
                 retention_days=settings.retention_days,
+                ring_buffer=ring_buffer,
             )
 
         # Build health tracker (in-memory market intelligence)

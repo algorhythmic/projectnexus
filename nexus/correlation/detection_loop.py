@@ -18,6 +18,11 @@ from nexus.ingestion.health import _get_rss_mb
 from nexus.intelligence.narrative import CatalystAnalyzer
 from nexus.store.base import BaseStore
 
+from typing import TYPE_CHECKING as _TC
+
+if _TC:
+    from nexus.ingestion.ring_buffer import EventRingBuffer
+
 
 class DetectionLoop(LoggerMixin):
     """Runs anomaly detection periodically across all active markets."""
@@ -35,8 +40,10 @@ class DetectionLoop(LoggerMixin):
         cross_platform_window_minutes: int = 60,
         retention_days: int = 0,
         max_markets_per_cycle: int = 200,
+        ring_buffer: Optional["EventRingBuffer"] = None,
     ) -> None:
         self._store = store
+        self._ring_buffer = ring_buffer
         self._window_configs = window_configs
         self._interval = interval_seconds
         self._baseline_hours = baseline_hours
@@ -98,7 +105,7 @@ class DetectionLoop(LoggerMixin):
 
         rss_before = _get_rss_mb()
 
-        wc = WindowComputer(self._store)
+        wc = WindowComputer(self._store, ring_buffer=self._ring_buffer)
         detector = AnomalyDetector(
             self._store, wc, baseline_hours=self._baseline_hours
         )
