@@ -206,6 +206,7 @@ def run(
             batch_timeout=settings.event_batch_timeout,
             metrics=metrics,
             ring_buffer=ring_buffer,
+            persist_price_change=settings.persist_price_change_events,
         )
         bus.start()
 

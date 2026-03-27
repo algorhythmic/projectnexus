@@ -38,7 +38,7 @@ class TestEventBus:
     async def test_put_and_drain(self, tmp_store):
         """Events put into the bus are drained to the store."""
         mid = await _insert_market(tmp_store)
-        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1, persist_price_change=True)
         bus.start()
 
         for i in range(5):
@@ -55,7 +55,7 @@ class TestEventBus:
     async def test_batch_flushing(self, tmp_store):
         """Events are flushed in batches up to batch_size."""
         mid = await _insert_market(tmp_store)
-        bus = EventBus(tmp_store, max_size=1000, batch_size=3, batch_timeout=0.1)
+        bus = EventBus(tmp_store, max_size=1000, batch_size=3, batch_timeout=0.1, persist_price_change=True)
         bus.start()
 
         for i in range(7):
@@ -69,7 +69,7 @@ class TestEventBus:
     async def test_stop_flushes_remaining(self, tmp_store):
         """stop() flushes any events left in the queue."""
         mid = await _insert_market(tmp_store)
-        bus = EventBus(tmp_store, max_size=100, batch_size=1000, batch_timeout=10.0)
+        bus = EventBus(tmp_store, max_size=100, batch_size=1000, batch_timeout=10.0, persist_price_change=True)
         bus.start()
 
         # Put events but batch_size is huge and timeout is long,
@@ -82,7 +82,7 @@ class TestEventBus:
 
     async def test_queue_size_tracking(self, tmp_store):
         """queue_size reflects current queue depth."""
-        bus = EventBus(tmp_store, max_size=100, batch_size=1000, batch_timeout=10.0)
+        bus = EventBus(tmp_store, max_size=100, batch_size=1000, batch_timeout=10.0, persist_price_change=True)
         # Don't start drain — just check queue size
         await bus.put(_make_event())
         await bus.put(_make_event())
@@ -90,12 +90,12 @@ class TestEventBus:
 
     async def test_events_written_starts_at_zero(self, tmp_store):
         """events_written starts at zero."""
-        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1, persist_price_change=True)
         assert bus.events_written == 0
 
     async def test_start_is_idempotent(self, tmp_store):
         """Calling start() twice doesn't create duplicate drain tasks."""
-        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1, persist_price_change=True)
         bus.start()
         task1 = bus._drain_task
         bus.start()
@@ -105,7 +105,7 @@ class TestEventBus:
 
     async def test_stop_without_start(self, tmp_store):
         """stop() on an unstarted bus does not error."""
-        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1)
+        bus = EventBus(tmp_store, max_size=100, batch_size=10, batch_timeout=0.1, persist_price_change=True)
         await bus.stop()  # should not raise
 
     async def test_metrics_collector_integration(self, tmp_store):
@@ -114,7 +114,7 @@ class TestEventBus:
         metrics = MetricsCollector()
         bus = EventBus(
             tmp_store, max_size=100, batch_size=10, batch_timeout=0.1,
-            metrics=metrics,
+            metrics=metrics, persist_price_change=True,
         )
         bus.start()
 

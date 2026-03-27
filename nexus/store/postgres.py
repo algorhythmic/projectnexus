@@ -134,10 +134,10 @@ SELECT
     m.category,
     m.end_date,
     m.is_active,
-    latest_price.new_value AS last_price,
-    latest_price.timestamp AS last_price_ts,
-    latest_volume.new_value AS last_volume,
-    latest_volume.timestamp AS last_volume_ts,
+    m.yes_price AS last_price,
+    m.price_updated_at AS last_price_ts,
+    NULL::double precision AS last_volume,
+    NULL::bigint AS last_volume_ts,
     COALESCE(m.volume, 0) AS volume,
     -- Rank score: volume (40%) + activity recency (30%) + expiry proximity (30%)
     (
@@ -149,10 +149,10 @@ SELECT
         ) * 0.4
         +
         COALESCE(
-            CASE WHEN latest_price.timestamp IS NOT NULL
+            CASE WHEN m.price_updated_at IS NOT NULL
                  THEN LEAST(
                      1.0 / GREATEST(
-                         EXTRACT(EPOCH FROM (NOW() - TO_TIMESTAMP(latest_price.timestamp / 1000.0))) / 3600.0,
+                         EXTRACT(EPOCH FROM (NOW() - TO_TIMESTAMP(m.price_updated_at / 1000.0))) / 3600.0,
                          0.1
                      ),
                      1.0
@@ -170,17 +170,8 @@ SELECT
         ) * 0.3
     ) AS rank_score
 FROM markets m
-LEFT JOIN LATERAL (
-    SELECT new_value, timestamp FROM events
-    WHERE market_id = m.id AND event_type = 'price_change'
-    ORDER BY timestamp DESC LIMIT 1
-) latest_price ON TRUE
-LEFT JOIN LATERAL (
-    SELECT new_value, timestamp FROM events
-    WHERE market_id = m.id AND event_type = 'volume_update'
-    ORDER BY timestamp DESC LIMIT 1
-) latest_volume ON TRUE
-WHERE m.is_active = TRUE;
+WHERE m.is_active = TRUE
+  AND m.yes_price IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_v_current_market_state_id
     ON v_current_market_state(market_id);
@@ -1206,6 +1197,32 @@ class PostgresStore(BaseStore, LoggerMixin):
                 series_prefix,
             )
         return [self._row_to_market(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Market price updates
+    # ------------------------------------------------------------------
+
+    async def update_market_price(
+        self, market_id: int, yes_price: float,
+        volume: int | None, last_updated: int
+    ) -> None:
+        """Update latest price directly on the markets row.
+
+        Only updates if last_updated is newer than the current value
+        (idempotent, handles out-of-order events).
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE markets
+                SET yes_price = $2,
+                    volume = COALESCE($3, volume),
+                    price_updated_at = $4
+                WHERE id = $1
+                  AND (price_updated_at IS NULL OR price_updated_at < $4)
+                """,
+                market_id, yes_price, volume, last_updated,
+            )
 
     # ------------------------------------------------------------------
     # Candle operations

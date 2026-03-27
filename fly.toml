@@ -21,7 +21,8 @@ primary_region = 'iad'
   KALSHI_USE_DEMO = 'false'
   LOG_LEVEL = 'INFO'
   POLYMARKET_ENABLED = 'false'
-  RETENTION_DAYS = '90'
+  PERSIST_PRICE_CHANGE_EVENTS = 'false'
+  RETENTION_DAYS = '14'
   STORE_BACKEND = 'postgres'
 
 [processes]

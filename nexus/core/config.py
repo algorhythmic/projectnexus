@@ -162,6 +162,12 @@ class Settings(BaseSettings):
         default=300, description="Seconds between ring buffer expiry sweeps"
     )
 
+    # Event persistence
+    persist_price_change_events: bool = Field(
+        default=False,
+        description="Write price_change events to PG (False = ring buffer only, saves ~90% writes)",
+    )
+
     # Monitoring
     health_report_interval_seconds: int = Field(
         default=60, description="Seconds between health report log entries"

@@ -361,6 +361,17 @@ class BaseStore(ABC):
         return []
 
     # ------------------------------------------------------------------
+    # Market price updates (Step 3.5 of event-stream migration)
+    # ------------------------------------------------------------------
+
+    async def update_market_price(
+        self, market_id: int, yes_price: float,
+        volume: Optional[int], last_updated: int
+    ) -> None:
+        """Update the latest price directly on the markets row."""
+        pass  # Default no-op for SQLite
+
+    # ------------------------------------------------------------------
     # Candle operations (Step 3 of event-stream migration)
     # ------------------------------------------------------------------
 

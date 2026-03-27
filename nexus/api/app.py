@@ -187,23 +187,47 @@ async def get_candlesticks(request: Request) -> Response:
         if resp is not None:
             return resp
 
-    # Try PG first — look up market_id from cached markets
     candles = None
     markets_entry = cache.get("markets")
-    if markets_entry and store is not None:
+    market_id = None
+    if markets_entry:
         market = next(
             (m for m in markets_entry.data if m.get("externalId") == ticker),
             None,
         )
-        if market and hasattr(store, "compute_candlesticks"):
+        if market:
+            market_id = market["marketId"]
+
+    # Source 1: Pre-computed candles table (fastest, no aggregation)
+    if market_id is not None and store is not None and hasattr(store, "get_candles"):
+        try:
+            rows = await store.get_candles(market_id, interval="1m", limit=500)
+            if rows:
+                candles = [
+                    {
+                        "time": r["open_ts"],
+                        "open": r["open"],
+                        "high": r["high"],
+                        "low": r["low"],
+                        "close": r["close"],
+                        "volume": r.get("volume", 0),
+                    }
+                    for r in reversed(rows)  # DB returns newest first, chart needs oldest first
+                ]
+        except Exception:
+            candles = None
+
+    # Source 2: Legacy compute_candlesticks() from raw events (fallback)
+    if not candles and market_id is not None and store is not None:
+        if hasattr(store, "compute_candlesticks"):
             try:
                 candles = await store.compute_candlesticks(
-                    market["marketId"], period_minutes=period
+                    market_id, period_minutes=period
                 )
             except Exception:
                 candles = None
 
-    # Fallback to Kalshi API via adapter
+    # Source 3: Kalshi API (for markets we don't have events for)
     if not candles:
         adapter = getattr(request.app.state, "kalshi_adapter", None)
         if adapter and hasattr(adapter, "get_candlesticks"):

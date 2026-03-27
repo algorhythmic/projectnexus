@@ -13,7 +13,7 @@ import asyncio
 from typing import TYPE_CHECKING, List, Optional
 
 from nexus.core.logging import LoggerMixin
-from nexus.core.types import EventRecord
+from nexus.core.types import EventRecord, EventType
 from nexus.store.base import BaseStore
 
 if TYPE_CHECKING:
@@ -33,6 +33,14 @@ class EventBus(LoggerMixin):
         await bus.stop()       # flushes remaining events
     """
 
+    # Event types that are always persisted to PG (not filtered)
+    _ALWAYS_PERSIST = frozenset({
+        EventType.TRADE,
+        EventType.NEW_MARKET,
+        EventType.STATUS_CHANGE,
+        EventType.VOLUME_UPDATE,
+    })
+
     def __init__(
         self,
         store: BaseStore,
@@ -41,6 +49,7 @@ class EventBus(LoggerMixin):
         batch_timeout: float = 1.0,
         metrics: Optional[MetricsCollector] = None,
         ring_buffer: Optional[EventRingBuffer] = None,
+        persist_price_change: bool = False,
     ) -> None:
         self._store = store
         self._queue: asyncio.Queue[EventRecord] = asyncio.Queue(maxsize=max_size)
@@ -51,6 +60,7 @@ class EventBus(LoggerMixin):
         self._events_written = 0
         self._metrics = metrics
         self._ring_buffer = ring_buffer
+        self._persist_price_change = persist_price_change
 
     @property
     def events_written(self) -> int:
@@ -138,8 +148,23 @@ class EventBus(LoggerMixin):
             self._ring_buffer.add_batch(batch)
             self._ring_buffer.maybe_cleanup()
 
+        # Shadow write: update markets table with latest prices
+        await self._update_market_prices(batch)
+
+        # Filter events for PG persistence
+        if self._persist_price_change:
+            persist_batch = batch
+        else:
+            persist_batch = [
+                e for e in batch if e.event_type in self._ALWAYS_PERSIST
+            ]
+
+        if not persist_batch:
+            # All events were price_change — nothing to write to PG
+            return
+
         try:
-            count = await self._store.insert_events(batch)
+            count = await self._store.insert_events(persist_batch)
             self._events_written += count
             if self._metrics is not None:
                 self._metrics.record_events_written(count)
@@ -158,6 +183,33 @@ class EventBus(LoggerMixin):
                 batch_size=len(batch),
                 error=str(exc),
             )
+
+    async def _update_market_prices(self, batch: List[EventRecord]) -> None:
+        """Batch-update markets table with latest prices from this batch.
+
+        Groups by market_id, takes the newest price_change per market,
+        issues one UPDATE per market. Errors are non-fatal.
+        """
+        latest_by_market: dict[int, EventRecord] = {}
+        for e in batch:
+            if e.event_type == EventType.PRICE_CHANGE:
+                existing = latest_by_market.get(e.market_id)
+                if existing is None or e.timestamp > existing.timestamp:
+                    latest_by_market[e.market_id] = e
+
+        if not latest_by_market:
+            return
+
+        for market_id, event in latest_by_market.items():
+            try:
+                await self._store.update_market_price(
+                    market_id=market_id,
+                    yes_price=event.new_value,
+                    volume=None,  # Volume comes from trade events, not price_change
+                    last_updated=event.timestamp,
+                )
+            except Exception:
+                pass  # Non-fatal — shadow write only
 
     async def _flush_remaining(self) -> None:
         """Drain any events left in the queue after shutdown signal."""
