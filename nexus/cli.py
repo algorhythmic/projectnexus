@@ -246,11 +246,11 @@ def run(
 
         # Build alert creator (optional — needs Convex credentials)
         alert_creator = None
-        if settings.convex_url and settings.convex_deploy_key:
+        if settings.convex_deployment_url and settings.convex_deploy_key:
             from nexus.alerts.creator import AlertCreator
             from nexus.sync.convex_client import ConvexClient
 
-            convex = ConvexClient(settings.convex_url, settings.convex_deploy_key)
+            convex = ConvexClient(settings.convex_deployment_url, settings.convex_deploy_key)
             alert_creator = AlertCreator(convex)
 
         # Build sync layer (refreshes PG views → BroadcastCache)
