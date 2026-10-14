@@ -1,5 +1,7 @@
 # MarketFinder
 
+> **Out of date:** this README describes the design before 2026-03-23, when Nexus pushed data into Convex sync tables. The webapp now reads broadcast data (markets, anomalies, topics, candlesticks) from the Nexus REST API through `src/hooks/use-nexus-query.ts` and `src/lib/nexus-api.ts`, and uses Convex only for sign-in, user preferences and alerts. See the [root README](../README.md) and `CLAUDE.md` for the current architecture. The `nexusSync` tables and mutations below no longer exist in this repo's `convex/`.
+
 A read-only presentation layer for prediction market intelligence, powered by data from [ProjectNexus](https://github.com/algorhythmic/projectnexus).
 
 ## How It Works
