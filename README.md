@@ -1,12 +1,14 @@
 # Nexus
 
-A prediction-market monitoring service that flags unusual price and volume moves and displays them in a React dashboard.
+A prediction-market monitoring service that flags unusual price and volume moves and displays them in MarketFinder, its React dashboard.
 
 A raw price feed does not explain which moves matter. Nexus combines streaming ingestion, statistical anomaly detection, related-market clustering and optional Claude-written explanations. Its dashboard reads cached API responses, reducing repeated database queries per viewer.
 
+**One repository:** Nexus is the data pipeline and API; [MarketFinder](#marketfinder-dashboard) is the frontend in `webapp/`. The former standalone MarketFinder repository is archived; development of both now belongs here.
+
 **Proof:** 449 test functions in 33 modules ([tests](tests/)) · recorded daily database writes reduced from ~487K to ~50K by buffering price ticks in memory ([migration results](docs/event-stream-migration.md)). The test figure is a source count; the write figures are a historical deployment result.
 
-[Dashboard](https://marketfinder.daviddunn.dev/) · [Architecture](#architecture)
+[MarketFinder dashboard](https://marketfinder.daviddunn.dev/) · [Architecture](#architecture)
 
 ## Quick start
 
@@ -30,6 +32,20 @@ Ingestion, detection, the REST API, dashboard and optional alert explanations ar
 ## Detailed documentation
 
 Nexus ingests streaming data from prediction market platforms (Kalshi, Polymarket), detects anomalous price and volume movements, identifies correlated shifts across semantically related markets, and surfaces structured alerts for human decision-making.
+
+## MarketFinder dashboard
+
+[MarketFinder](https://marketfinder.daviddunn.dev/) is the user-facing part of Nexus, maintained in [webapp/](webapp/). It provides a market overview, searchable market tables, price candlesticks, an anomaly feed, related-market topics, and personal alerts and settings.
+
+The frontend uses React, Vite and TypeScript. Shared market data comes from the Nexus REST API through [the fetch client](webapp/src/lib/nexus-api.ts) and [polling hooks](webapp/src/hooks/use-nexus-query.ts). Convex handles sign-in and per-user data; it no longer stores the shared market feed.
+
+| Component | Location | Responsibility |
+|---|---|---|
+| Nexus | [nexus/](nexus/) | Ingestion, analysis, cached REST API |
+| MarketFinder | [webapp/](webapp/) | Dashboard, market exploration and alert views |
+| Convex backend | [convex/](convex/) | Authentication, user preferences and personal alerts |
+
+Use this repository for frontend changes and issues. See [Webapp and Convex](#webapp-and-convex) for setup; `VITE_NEXUS_API_URL` selects the API endpoint. The older webapp architecture documents are retained as design history and describe the superseded Convex sync approach.
 
 ## Project Status
 
